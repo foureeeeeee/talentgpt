@@ -936,66 +936,49 @@ IMPORTANT: securityAlerts must always be present (use [] if none). Scores must N
       }
 
       const scoringPrompt = buildScoringPrompt(filter);
-      const content: any[] = [{ type: 'text', text: scoringPrompt }];
 
-      if (jobDescription?.trim()) {
-        content.push({ type: 'text', text: `\n\nJOB DESCRIPTION:\n${jobDescription}\n---` });
-      }
-      if (managerNotes?.trim()) {
-        content.push({ type: 'text', text: `\n\nMANAGER NOTES:\n${managerNotes}\n---` });
-      }
-
-      cvs.forEach((cv: any, idx: number) => {
-        content.push({ type: 'text', text: `\n\nCANDIDATE ${idx + 1}: ${cv.name}\n` });
+      // Per-candidate batching: one call per CV to avoid 413 with multiple large PDFs.
+      const perRaws = await Promise.all(cvs.map(async (cv: any) => {
+        const singleContent: any[] = [{ type: 'text', text: scoringPrompt }];
+        if (jobDescription?.trim())
+          singleContent.push({ type: 'text', text: `\n\nJOB DESCRIPTION:\n${jobDescription}\n---` });
+        if (managerNotes?.trim())
+          singleContent.push({ type: 'text', text: `\n\nMANAGER NOTES:\n${managerNotes}\n---` });
+        singleContent.push({ type: 'text', text: `\n\nCANDIDATE: ${cv.name}\n` });
         if (cv.type === 'pdf' && cv.fileData) {
           const base64 = cv.fileData.includes(',') ? cv.fileData.split(',')[1] : cv.fileData;
-          content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } } as any);
+          singleContent.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } } as any);
         } else {
-          content.push({ type: 'text', text: cv.content?.trim() || '(No candidate data available)' });
+          singleContent.push({ type: 'text', text: cv.content?.trim() || '(No candidate data available)' });
         }
-        content.push({ type: 'text', text: '\n---' });
-      });
+        singleContent.push({ type: 'text', text: '\n---\n\nOutput the JSON array now:' });
+        const safe = singleContent.filter((b: any) => b.type !== 'text' || b.text?.trim());
+        const r = await anthropic.messages.create({
+          model: 'claude-haiku-4-5',
+          max_tokens: 2048,
+          messages: [{ role: 'user', content: safe }],
+        });
+        return { cv, raw: r.content[0]?.type === 'text' ? r.content[0].text.trim() : '' };
+      }));
 
-      content.push({ type: 'text', text: '\n\nOutput the JSON array now:' });
-
-      const safeContent = content.filter((b: any) => b.type !== 'text' || b.text?.trim());
-
-      const response = await anthropic.messages.create({
-        model: 'claude-haiku-4-5',
-        max_tokens: 8192,
-        messages: [{ role: 'user', content: safeContent }],
-      });
-
-      const raw = response.content[0].type === 'text' ? response.content[0].text.trim() : '';
-      const jsonMatch = raw.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) throw new Error('AI did not return valid JSON scores');
-
-      // Sanitise common LLM JSON mistakes: unescaped quotes inside string values
-      const sanitised = jsonMatch[0].replace(
-        /"confidenceReason"\s*:\s*"((?:[^"\\]|\\.)*)"/g,
-        (_m, val) => `"confidenceReason":"${val.replace(/"/g, '\\"')}"`
-      );
-
-      let scoresArray: any[];
-      try {
-        scoresArray = JSON.parse(sanitised);
-      } catch {
-        // Last resort: strip the confidence fields and parse without them
-        const stripped = jsonMatch[0]
-          .replace(/"confidence"\s*:\s*\d+\s*,?/g, '')
-          .replace(/"confidenceLevel"\s*:\s*"[^"]*"\s*,?/g, '')
-          .replace(/"confidenceReason"\s*:\s*"[^"]*"\s*,?/g, '')
-          .replace(/"confidenceFlags"\s*:\s*\[[^\]]*\]\s*,?/g, '');
-        scoresArray = JSON.parse(stripped);
-      }
-
-      // Map by index → cv.id
+      // Parse each per-candidate result and merge into a single scores map.
       const scoresByCvId: Record<string, any> = {};
-      cvs.forEach((cv: any, idx: number) => {
-        if (scoresArray[idx]) scoresByCvId[cv.id] = scoresArray[idx];
-      });
-
-      res.json({ scores: scoresByCvId });
+      for (const { cv, raw } of perRaws) {
+        const jsonMatch = raw.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) continue;
+        const sanitised = jsonMatch[0].replace(
+          /"confidenceReason"\s*:\s*"((?:[^"\\]|\\.)*)"/g,
+          (_m: string, val: string) => `"confidenceReason":"${val.replace(/"/g, '\\"')}"`
+        );
+        let parsed: any[];
+        try {
+          parsed = JSON.parse(sanitised);
+        } catch {
+          try { parsed = JSON.parse(jsonrepair(jsonMatch[0])); } catch { continue; }
+        }
+        if (Array.isArray(parsed) && parsed[0]) scoresByCvId[cv.id] = parsed[0];
+      }
+      return res.json({ scores: scoresByCvId });
     } catch (err: any) {
       console.error('Scoring error:', err);
       res.status(500).json({ error: err.message || 'Failed to score candidates' });
