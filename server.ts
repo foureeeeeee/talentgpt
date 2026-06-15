@@ -798,7 +798,10 @@ async function startServer() {
             messages: [{ role: 'user', content: safe }],
           });
           const text = r.content[0]?.type === 'text' ? r.content[0].text.trim() : '';
-          return `## Candidate: ${cv.name}\n\n${text}`;
+          // Strip any "## Candidate: ..." line(s) the model auto-adds (from multi-candidate
+          // rule in prompts) before prepending our own controlled header, to avoid double-split.
+          const cleanText = text.replace(/^(##\s*Candidate:\s*[^\n]*\n+)+/i, '').trim();
+          return `## Candidate: ${cv.name}\n\n${cleanText}`;
         });
         return res.json({ result: perResults.join('\n\n---\n\n') });
       }
