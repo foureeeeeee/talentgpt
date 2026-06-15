@@ -95,6 +95,18 @@ Output Format Rules (follow strictly):
 - Put final recommendations and hiring decisions in > blockquotes
 - Output must be highly professional and formatted nicely in Markdown.`;
 
+const SPARK_SYSTEM = `${SECURITY_PREAMBLE}
+You are a talent spotter writing one-sentence flash points for HR professionals.
+
+YOUR TASK: Read the candidate's CV and output EXACTLY ONE plain-English sentence (15–25 words) identifying their single most remarkable or unique quality.
+
+STRICT OUTPUT RULES:
+• Output ONLY the sentence. Nothing else.
+• No markdown, no headers, no bullet points, no bold text, no labels, no preamble.
+• Do not write "Flash Point:", "Spark:", "One-Sentence:", or any prefix.
+• Do not mention the candidate's name.
+• If nothing genuinely stands out: Solid generalist with broad experience and no single standout differentiator.`;
+
 const PROMPTS: Record<string, string> = {
   snapshot: `You are a Senior Recruitment Specialist.
 Analyze the candidate's CV and generate an executive summary.
@@ -1304,17 +1316,11 @@ ${rawText.slice(0, 14000)}`;
       if (!cvs || !Array.isArray(cvs) || cvs.length === 0)
         return res.status(400).json({ error: 'cvs array is required' });
 
-      const sparkPrompt = `You are a talent spotter. In ONE sentence (15–25 words), identify this candidate's single most remarkable or unique quality that sets them apart from a typical applicant.
-
-Focus only on what is genuinely rare or surprising: an unusual skill combination, a standout achievement, an unexpected background, or an exceptional signal. Be specific — name the actual thing. Avoid generic praise like "strong communicator" or "hard worker".
-
-If nothing stands out, respond: "Solid generalist with no single standout differentiator."`;
-
       const results = await Promise.all(cvs.map(async (cv: any) => {
-        const content: any[] = [{ type: 'text', text: sparkPrompt }];
+        const content: any[] = [];
         if (jobDescription?.trim())
-          content.push({ type: 'text', text: `\n\nROLE CONTEXT:\n${jobDescription.trim()}\n---` });
-        content.push({ type: 'text', text: `\n\nCANDIDATE: ${cv.name}\n` });
+          content.push({ type: 'text', text: `ROLE CONTEXT:\n${jobDescription.trim()}\n---\n` });
+        content.push({ type: 'text', text: `CANDIDATE: ${cv.name}\n` });
         if (cv.type === 'pdf' && cv.fileData) {
           const b64 = cv.fileData.includes(',') ? cv.fileData.split(',')[1] : cv.fileData;
           content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } } as any);
@@ -1326,10 +1332,19 @@ If nothing stands out, respond: "Solid generalist with no single standout differ
           const r = await anthropic.messages.create({
             model: 'claude-haiku-4-5',
             max_tokens: 100,
-            system: CORE_PRINCIPLES,
+            system: SPARK_SYSTEM,
             messages: [{ role: 'user', content: safeContent }],
           });
-          const spark = r.content[0]?.type === 'text' ? r.content[0].text.trim() : '';
+          const raw = r.content[0]?.type === 'text' ? r.content[0].text.trim() : '';
+          const spark = raw
+            .replace(/^#+\s.+$/gm, '')
+            .replace(/\*\*[^*]+\*\*\s*[-–]\s*/g, '')
+            .replace(/^(Flash Point|Spark|Answer|Summary|One-Sentence[^:]*)\s*:\s*/im, '')
+            .replace(/---+/g, '')
+            .split('\n')
+            .map((l: string) => l.trim())
+            .filter(Boolean)
+            .pop() ?? '';
           return { id: cv.id, spark };
         } catch {
           return { id: cv.id, spark: '' };
