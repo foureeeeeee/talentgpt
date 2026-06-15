@@ -682,6 +682,17 @@ Every question MUST reference something SPECIFIC from this candidate's CV. Gener
 };
 
 
+// Runs `fn` over `items` BATCH_SIZE at a time to avoid hitting Anthropic's
+// concurrent-connection rate limit when many candidates are processed in parallel.
+async function runBatched<T, R>(items: T[], batchSize: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    results.push(...await Promise.all(batch.map(fn)));
+  }
+  return results;
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -754,7 +765,7 @@ async function startServer() {
       if (isMultiCv && PER_CANDIDATE_MODULES.has(type)) {
         const SONNET_MODULES_LOCAL = new Set(['interview', 'compensation', 'rejection', 'audit']);
         const usesSonnet = SONNET_MODULES_LOCAL.has(type);
-        const perResults = await Promise.all(cvs.map(async (cv: any) => {
+        const perResults = await runBatched(cvs, 3, async (cv: any) => {
           const singleContent: any[] = [];
           singleContent.push({ type: 'text', text: personaPrompt });
           if (jobDescription?.trim())
@@ -780,7 +791,7 @@ async function startServer() {
           });
           const text = r.content[0]?.type === 'text' ? r.content[0].text.trim() : '';
           return `## Candidate: ${cv.name}\n\n${text}`;
-        }));
+        });
         return res.json({ result: perResults.join('\n\n---\n\n') });
       }
 
@@ -938,7 +949,7 @@ IMPORTANT: securityAlerts must always be present (use [] if none). Scores must N
       const scoringPrompt = buildScoringPrompt(filter);
 
       // Per-candidate batching: one call per CV to avoid 413 with multiple large PDFs.
-      const perRaws = await Promise.all(cvs.map(async (cv: any) => {
+      const perRaws = await runBatched(cvs, 3, async (cv: any) => {
         const singleContent: any[] = [{ type: 'text', text: scoringPrompt }];
         if (jobDescription?.trim())
           singleContent.push({ type: 'text', text: `\n\nJOB DESCRIPTION:\n${jobDescription}\n---` });
@@ -959,7 +970,7 @@ IMPORTANT: securityAlerts must always be present (use [] if none). Scores must N
           messages: [{ role: 'user', content: safe }],
         });
         return { cv, raw: r.content[0]?.type === 'text' ? r.content[0].text.trim() : '' };
-      }));
+      });
 
       // Parse each per-candidate result and merge into a single scores map.
       const scoresByCvId: Record<string, any> = {};
@@ -1329,7 +1340,7 @@ ${rawText.slice(0, 14000)}`;
       if (!cvs || !Array.isArray(cvs) || cvs.length === 0)
         return res.status(400).json({ error: 'cvs array is required' });
 
-      const results = await Promise.all(cvs.map(async (cv: any) => {
+      const results = await runBatched(cvs, 3, async (cv: any) => {
         const content: any[] = [];
         if (jobDescription?.trim())
           content.push({ type: 'text', text: `ROLE CONTEXT:\n${jobDescription.trim()}\n---\n` });
@@ -1362,7 +1373,7 @@ ${rawText.slice(0, 14000)}`;
         } catch {
           return { id: cv.id, spark: '' };
         }
-      }));
+      });
 
       const sparkPoints = Object.fromEntries(results.map(r => [r.id, r.spark]));
       res.json({ sparkPoints });
