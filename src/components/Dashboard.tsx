@@ -269,13 +269,21 @@ const CONFIDENCE_FLAG_LABELS: Record<string, { label: string; positive: boolean 
 function DimBar({ dim }: { dim: AiDimension }) {
   const pct = Math.round((dim.score / dim.max) * 100);
   const barColor = dim.purple ? 'bg-purple-400' : pct >= 70 ? 'bg-emerald-400' : pct >= 40 ? 'bg-amber-400' : 'bg-red-400';
+  const delta = Math.round(dim.score - dim.max / 2);
+  const deltaLabel = delta > 0 ? `+${delta}` : `${delta}`;
+  const deltaCls = dim.purple
+    ? 'text-purple-400'
+    : delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-red-500' : 'text-gray-400';
   return (
     <div className="space-y-0.5">
       <div className="flex items-center justify-between gap-1">
         <span className={`text-[7.5px] font-semibold uppercase tracking-wide leading-none truncate ${dim.purple ? 'text-purple-500' : 'text-gray-500'}`}>
           {dim.purple && <span className="mr-0.5">★</span>}{dim.label}
         </span>
-        <span className="text-[9px] font-bold text-gray-700 tabular-nums shrink-0">{dim.score}<span className="text-gray-400 font-normal">/{dim.max}</span></span>
+        <div className="flex items-center gap-1 shrink-0">
+          <span className={`text-[8px] font-bold tabular-nums ${deltaCls}`}>{deltaLabel}</span>
+          <span className="text-[9px] font-bold text-gray-700 tabular-nums">{dim.score}<span className="text-gray-400 font-normal">/{dim.max}</span></span>
+        </div>
       </div>
       <div className={`h-1 rounded-full overflow-hidden ${dim.purple ? 'bg-purple-100' : 'bg-gray-100'}`}>
         <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
@@ -822,9 +830,13 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
           </span>
           {aiScore && (
             <>
-              <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full tabular-nums ${scoreBadgeCls(indicator)}`}>
+              <button
+                onClick={e => { e.stopPropagation(); setZoomedScore({ name: cv.name, colorClass: color, aiScore }); }}
+                className={`text-[10px] font-black px-1.5 py-0.5 rounded-full tabular-nums cursor-pointer hover:opacity-80 transition-opacity ${scoreBadgeCls(indicator)}`}
+                title="Click to see score breakdown"
+              >
                 {aiScore.total}/100
-              </span>
+              </button>
               <button onClick={e => { e.stopPropagation(); toggleExpand(cv.id); }}
                 className="w-4 h-4 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-all"
                 title={isExpanded ? 'Collapse' : 'See score breakdown'}>
