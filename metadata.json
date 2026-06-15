@@ -1,0 +1,8 @@
+{
+  "name": "TalentGo",
+  "description": "Evidence-based AI Recruitment Intelligence System that analyzes candidates across skills, potential, psychological fit, and risks.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

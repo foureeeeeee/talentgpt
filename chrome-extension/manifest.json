@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "TalentGPT LinkedIn Connector",
+  "version": "1.0.0",
+  "description": "Send any LinkedIn profile to TalentGPT with one click — full DOM scrape with auto-scroll.",
+  "permissions": ["activeTab", "scripting", "tabs"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "http://localhost:3000/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Send LinkedIn profile to TalentGPT"
+  }
+}
