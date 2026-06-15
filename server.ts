@@ -749,6 +749,41 @@ async function startServer() {
       // Modules that produce per-candidate sections (not cross-candidate comparisons)
       const PER_CANDIDATE_MODULES = new Set(['potential','risk','psychology','interview','compensation','rejection','audit','snapshot','match','retention']);
 
+      // Per-candidate batching: avoids 413 when multiple large PDFs are in one request.
+      // Each candidate gets its own Claude call; results are joined with ## Candidate: headers.
+      if (isMultiCv && PER_CANDIDATE_MODULES.has(type)) {
+        const SONNET_MODULES_LOCAL = new Set(['interview', 'compensation', 'rejection', 'audit']);
+        const usesSonnet = SONNET_MODULES_LOCAL.has(type);
+        const perResults = await Promise.all(cvs.map(async (cv: any) => {
+          const singleContent: any[] = [];
+          singleContent.push({ type: 'text', text: personaPrompt });
+          if (jobDescription?.trim())
+            singleContent.push({ type: 'text', text: `\n\n--- JOB DESCRIPTION ---\n${jobDescription}\n-----------------------\n` });
+          if (managerNotes?.trim())
+            singleContent.push({ type: 'text', text: `\n\n--- MANAGER NOTES ---\n${managerNotes}\n---------------------\n` });
+          singleContent.push({ type: 'text', text: `\n\n--- CANDIDATE (${cv.name}) ---\n` });
+          if (cv.type === 'pdf' && cv.fileData) {
+            const b64 = cv.fileData.includes(',') ? cv.fileData.split(',')[1] : cv.fileData;
+            singleContent.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } } as any);
+          } else if (cv.type === 'linkedin') {
+            singleContent.push({ type: 'text', text: cv.content?.trim() || '(URL not provided)' });
+          } else {
+            singleContent.push({ type: 'text', text: cv.content?.trim() || '(No CV text provided)' });
+          }
+          singleContent.push({ type: 'text', text: '\n---------------------\n' });
+          const safe = singleContent.filter((b: any) => b.type !== 'text' || b.text?.trim());
+          const r = await anthropic.messages.create({
+            model: usesSonnet ? 'claude-sonnet-4-6' : 'claude-haiku-4-5',
+            max_tokens: usesSonnet ? 8192 : 4096,
+            system: CORE_PRINCIPLES,
+            messages: [{ role: 'user', content: safe }],
+          });
+          const text = r.content[0]?.type === 'text' ? r.content[0].text.trim() : '';
+          return `## Candidate: ${cv.name}\n\n${text}`;
+        }));
+        return res.json({ result: perResults.join('\n\n---\n\n') });
+      }
+
       let finalInstruction: string;
       if (isTeamOpt) {
         finalInstruction = '\nReturn ONLY the JSON object described above — no markdown fences, no prose.';
