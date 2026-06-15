@@ -433,8 +433,11 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
 
   useEffect(() => {
     if (!active || !activatedFilters.has(activeFilter)) return;
-    if (filterScoresRef.current[activeFilter]) return;
     if (scoringFilterRef.current) return;
+
+    const existingScores = filterScoresRef.current[activeFilter] ?? {};
+    const unscored = active.candidates.filter(cv => !existingScores[cv.id]);
+    if (unscored.length === 0) return;
 
     const f = activeFilter;
     scoringFilterRef.current = f;
@@ -444,12 +447,12 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
     fetch('/api/score-candidates', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cvs: active.candidates, jobDescription: active.description, managerNotes: active.managerNotes, filter: f }),
+      body: JSON.stringify({ cvs: unscored, jobDescription: active.description, managerNotes: active.managerNotes, filter: f }),
     })
       .then(r => r.json().then((d: any) => ({ ok: r.ok, d })))
       .then(({ ok, d }) => {
         if (!ok) throw new Error(d.error || 'Scoring failed');
-        setFilterScores(prev => ({ ...prev, [f]: d.scores as AiScores }));
+        setFilterScores(prev => ({ ...prev, [f]: { ...existingScores, ...(d.scores as AiScores) } }));
         setAnimKey(k => k + 1);
       })
       .catch((err: any) => setScoringError(err.message || 'Scoring failed'))
