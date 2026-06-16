@@ -5,7 +5,7 @@ import {
   RotateCcw, Code2, Clock, Zap, BookOpen, Heart, SlidersHorizontal,
   Loader2, AlertCircle, TrendingUp, ShieldCheck, AlertTriangle, Sparkles,
   Fingerprint, ChevronUp, ClipboardList, Maximize2,
-  TrendingDown, Mail, Eye, EyeOff, Filter, Layers,
+  TrendingDown, Mail, Eye, EyeOff, Filter, Layers, Copy,
 } from 'lucide-react';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
@@ -346,6 +346,13 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
   // Email draft
   const [showEmail, setShowEmail] = useState(false);
 
+  // Rejection email
+  const [showRejEmail, setShowRejEmail] = useState(false);
+  const [rejEmails, setRejEmails] = useState<{ name: string; subject: string; body: string }[]>([]);
+  const [rejEmailIdx, setRejEmailIdx] = useState(0);
+  const [rejEmailLoading, setRejEmailLoading] = useState(false);
+  const [rejEmailTo, setRejEmailTo] = useState('');
+
   // JD Bias Audit
   const [showBiasAudit, setShowBiasAudit] = useState(false);
   const [biasLoading, setBiasLoading] = useState(false);
@@ -543,6 +550,31 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
       setSparkLoading(false);
     }
   }, [showSparks, sparkPoints, active]);
+
+  const handleRejectionEmails = useCallback(async () => {
+    if (!active) return;
+    const targets = selected.size > 0
+      ? active.candidates.filter(c => selected.has(c.id))
+      : active.candidates;
+    setRejEmails([]);
+    setRejEmailIdx(0);
+    setRejEmailTo('');
+    setRejEmailLoading(true);
+    setShowRejEmail(true);
+    try {
+      const r = await fetch('/api/rejection-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cvs: targets, jobDescription: active.description ?? '' }),
+      });
+      const d = await r.json();
+      setRejEmails(d.emails ?? []);
+    } catch {
+      setRejEmails([]);
+    } finally {
+      setRejEmailLoading(false);
+    }
+  }, [active, selected]);
 
   // ── Change filter ─────────────────────────────────────────────────────────────
   const changeFilter = useCallback((f: FilterType) => {
@@ -1109,6 +1141,18 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
                     >
                       <Mail className="w-3.5 h-3.5" />
                       Email Shortlist
+                    </button>
+                  )}
+                  {/* Rejection Emails */}
+                  {active.candidates.length > 0 && (
+                    <button
+                      onClick={handleRejectionEmails}
+                      disabled={rejEmailLoading}
+                      title={selected.size > 0 ? `Draft rejection emails for ${selected.size} selected candidate${selected.size !== 1 ? 's' : ''}` : 'Draft rejection emails for all candidates with missing skills & improvement roadmap'}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 text-gray-600 border-gray-200 hover:border-red-400 hover:text-red-700 hover:bg-red-50"
+                    >
+                      {rejEmailLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
+                      {rejEmailLoading ? 'Drafting…' : 'Rejection Emails'}
                     </button>
                   )}
                   {/* Spark Points */}
@@ -1941,6 +1985,81 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
                   </div>
                 );
               })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rejection Emails Modal */}
+      {showRejEmail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setShowRejEmail(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="font-bold text-gray-900">Rejection Email Drafts</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Personalised with missing skills &amp; improvement roadmap</p>
+              </div>
+              <button onClick={() => setShowRejEmail(false)} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {rejEmailLoading ? (
+                <div className="flex flex-col items-center justify-center py-10 gap-3 text-gray-400">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <span className="text-sm">Generating rejection emails…</span>
+                </div>
+              ) : rejEmails.length === 0 ? (
+                <div className="text-center text-sm text-red-400 py-8">Failed to generate emails. Please try again.</div>
+              ) : (
+                <>
+                  {rejEmails.length > 1 && (
+                    <div className="flex gap-2 flex-wrap">
+                      {rejEmails.map((e, i) => (
+                        <button key={i} onClick={() => { setRejEmailIdx(i); setRejEmailTo(''); }}
+                          className={`text-xs px-3 py-1 rounded-full border transition-all ${i === rejEmailIdx ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+                          {e.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 block mb-1">To (optional)</label>
+                    <input
+                      type="email"
+                      value={rejEmailTo}
+                      onChange={e => setRejEmailTo(e.target.value)}
+                      placeholder="candidate@email.com"
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 block mb-1">Subject</label>
+                    <div className="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700">{rejEmails[rejEmailIdx].subject}</div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 block mb-1">Body</label>
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 text-xs text-gray-700 whitespace-pre-wrap leading-relaxed font-mono">{rejEmails[rejEmailIdx].body}</div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => navigator.clipboard.writeText(`Subject: ${rejEmails[rejEmailIdx].subject}\n\n${rejEmails[rejEmailIdx].body}`)}
+                      className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-xs font-semibold rounded-lg hover:bg-gray-700 transition-all"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> Copy Email
+                    </button>
+                    <a
+                      href={`mailto:${rejEmailTo}?subject=${encodeURIComponent(rejEmails[rejEmailIdx].subject)}&body=${encodeURIComponent(rejEmails[rejEmailIdx].body)}`}
+                      className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-700 text-xs font-semibold rounded-lg hover:bg-gray-50 transition-all"
+                    >
+                      <Mail className="w-3.5 h-3.5" /> Open in Email Client
+                    </a>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

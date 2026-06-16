@@ -1647,42 +1647,54 @@ ${cvText.slice(0, 6000)}`,
     });
 
     // ── Rejection Email Generator ────────────────────────────────────────────────
+    // Accepts cvs[] + jobDescription; generates one personalised rejection email
+    // per candidate (missing skills + improvement roadmap) using withConcurrency.
     app.post('/api/rejection-email', async (req, res) => {
       try {
-        const { result } = req.body;
-        if (!result?.trim()) return res.status(400).json({ error: 'No analysis result provided.' });
+        const { cvs, jobDescription } = req.body;
+        if (!Array.isArray(cvs) || cvs.length === 0) {
+          return res.status(400).json({ error: 'No candidates provided.' });
+        }
 
-        const response = await anthropic.messages.create({
-          model: 'claude-haiku-4-5',
-          max_tokens: 4096,
-          system: SECURITY_PREAMBLE,
-          messages: [{
-            role: 'user',
-            content: `You are an empathetic HR professional writing rejection emails.
+        const perEmails = await withConcurrency(cvs, 50, async (cv: any) => {
+          const cvText = cv.content?.trim() || '(No CV content provided)';
+          const jdSection = jobDescription?.trim()
+            ? `\n\nJOB DESCRIPTION:\n${jobDescription}\n`
+            : '';
+          const r = await anthropic.messages.create({
+            model: 'claude-haiku-4-5',
+            max_tokens: 1024,
+            system: SECURITY_PREAMBLE,
+            messages: [{
+              role: 'user',
+              content: `You are an empathetic HR professional writing a rejection email for a job applicant.
 
-Based on the candidate rejection analysis below, write a professional, compassionate rejection email for EACH candidate. Focus on:
-- Acknowledging their strengths briefly
-- Clearly but kindly naming the critical skill gaps
-- Giving 2-3 concrete, actionable improvement suggestions
-- Encouraging reapplication after improvement
+Based on the candidate's CV${jobDescription?.trim() ? ' and the job description' : ''}, identify the key skill gaps and write a professional, compassionate rejection email. The email should:
+- Open with a warm, respectful acknowledgement
+- Briefly mention 1-2 genuine strengths from their CV
+- Clearly but kindly name 2-3 critical missing skills or gaps
+- Give concrete, actionable improvement suggestions for each gap
+- Encourage them to reapply once they've addressed the gaps
+- Close warmly
 
-Return ONLY a valid JSON array — no markdown fences, no extra text:
-[{"name":"Candidate Name","subject":"Re: Your Application","body":"Full email text..."}]
-
-One object per candidate. If only one candidate, return a single-item array.
-
-REJECTION ANALYSIS:
-${result}`,
-          }],
+Return ONLY a valid JSON object — no markdown fences:
+{"subject":"Your subject line here","body":"Full email text here"}
+${jdSection}
+CANDIDATE: ${cv.name}
+CV:
+${cvText}`,
+            }],
+          });
+          const raw = r.content[0]?.type === 'text' ? r.content[0].text.trim() : '{}';
+          const json = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
+          const parsed = JSON.parse(json);
+          return { name: cv.name, subject: parsed.subject ?? 'Re: Your Application', body: parsed.body ?? '' };
         });
 
-        const raw = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '[]';
-        const json = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
-        const emails = JSON.parse(json);
-        res.json({ emails });
+        res.json({ emails: perEmails });
       } catch (err: any) {
         console.error('Rejection email error:', err);
-        res.status(500).json({ error: 'Failed to generate rejection email.' });
+        res.status(500).json({ error: 'Failed to generate rejection emails.' });
       }
     });
 
