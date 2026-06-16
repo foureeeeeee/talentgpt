@@ -7,7 +7,7 @@ import {
   Loader2, AlertCircle, Copy, Check, RefreshCw,
   BarChart2, Search, X, User, Tag,
   ZoomIn, ZoomOut, Maximize2, RotateCcw,
-  FileText, Sparkles, Download,
+  FileText, Sparkles, Download, Mail,
 } from 'lucide-react';
 import { AnalysisModule, CV } from '../types';
 
@@ -1778,6 +1778,34 @@ export function AnalysisResults({
   const hasCvPanel    = showCvPanel && cvs.length > 0;
   const hasScorePanel = showScorePanel && cvs.length > 0;
 
+  const [showRejEmail, setShowRejEmail] = useState(false);
+  const [rejEmails, setRejEmails] = useState<{ name: string; subject: string; body: string }[]>([]);
+  const [rejEmailIdx, setRejEmailIdx] = useState(0);
+  const [rejEmailLoading, setRejEmailLoading] = useState(false);
+  const [rejEmailTo, setRejEmailTo] = useState('');
+
+  async function handleDraftRejEmail() {
+    if (!result) return;
+    setRejEmailLoading(true);
+    setRejEmails([]);
+    setRejEmailIdx(0);
+    setRejEmailTo('');
+    setShowRejEmail(true);
+    try {
+      const r = await fetch('/api/rejection-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ result }),
+      });
+      const d = await r.json();
+      setRejEmails(d.emails ?? []);
+    } catch {
+      setRejEmails([]);
+    } finally {
+      setRejEmailLoading(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-gray-500 h-full gap-4">
@@ -1837,6 +1865,15 @@ export function AnalysisResults({
         <div className="flex-1 overflow-y-auto bg-gray-50/50 min-w-0">
           <div className="max-w-4xl mx-auto p-8">
             <div className="flex justify-end items-center gap-2 mb-4">
+              {activeModule === 'rejection' && result && (
+                <button
+                  onClick={handleDraftRejEmail}
+                  className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-700 px-2.5 py-1.5 rounded-lg hover:bg-gray-100 border border-transparent hover:border-gray-200 transition-all"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  <span>Draft Rejection Email</span>
+                </button>
+              )}
               <CopyButton text={result} />
             </div>
 
@@ -1869,6 +1906,81 @@ export function AnalysisResults({
           />
         )}
       </div>
+
+      {/* Rejection Email Modal */}
+      {showRejEmail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setShowRejEmail(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="font-bold text-gray-900">Rejection Email Draft</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Personalised with missing skills &amp; improvement roadmap</p>
+              </div>
+              <button onClick={() => setShowRejEmail(false)} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {rejEmailLoading ? (
+                <div className="flex flex-col items-center justify-center py-10 gap-3 text-gray-400">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <span className="text-sm">Generating email draft…</span>
+                </div>
+              ) : rejEmails.length === 0 ? (
+                <div className="text-center text-sm text-red-400 py-8">Failed to generate email. Please try again.</div>
+              ) : (
+                <>
+                  {rejEmails.length > 1 && (
+                    <div className="flex gap-2 flex-wrap">
+                      {rejEmails.map((e, i) => (
+                        <button key={i} onClick={() => { setRejEmailIdx(i); setRejEmailTo(''); }}
+                          className={`text-xs px-3 py-1 rounded-full border transition-all ${i === rejEmailIdx ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+                          {e.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 block mb-1">To (optional)</label>
+                    <input
+                      type="email"
+                      value={rejEmailTo}
+                      onChange={e => setRejEmailTo(e.target.value)}
+                      placeholder="candidate@email.com"
+                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 block mb-1">Subject</label>
+                    <div className="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-700">{rejEmails[rejEmailIdx].subject}</div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 block mb-1">Body</label>
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 text-xs text-gray-700 whitespace-pre-wrap leading-relaxed font-mono">{rejEmails[rejEmailIdx].body}</div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => navigator.clipboard.writeText(`Subject: ${rejEmails[rejEmailIdx].subject}\n\n${rejEmails[rejEmailIdx].body}`)}
+                      className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-xs font-semibold rounded-lg hover:bg-gray-700 transition-all"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> Copy Email
+                    </button>
+                    <a
+                      href={`mailto:${rejEmailTo}?subject=${encodeURIComponent(rejEmails[rejEmailIdx].subject)}&body=${encodeURIComponent(rejEmails[rejEmailIdx].body)}`}
+                      className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-700 text-xs font-semibold rounded-lg hover:bg-gray-50 transition-all"
+                    >
+                      <Mail className="w-3.5 h-3.5" /> Open in Email Client
+                    </a>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

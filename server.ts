@@ -1646,6 +1646,46 @@ ${cvText.slice(0, 6000)}`,
       }
     });
 
+    // ── Rejection Email Generator ────────────────────────────────────────────────
+    app.post('/api/rejection-email', async (req, res) => {
+      try {
+        const { result } = req.body;
+        if (!result?.trim()) return res.status(400).json({ error: 'No analysis result provided.' });
+
+        const response = await anthropic.messages.create({
+          model: 'claude-haiku-4-5',
+          max_tokens: 4096,
+          system: SECURITY_PREAMBLE,
+          messages: [{
+            role: 'user',
+            content: `You are an empathetic HR professional writing rejection emails.
+
+Based on the candidate rejection analysis below, write a professional, compassionate rejection email for EACH candidate. Focus on:
+- Acknowledging their strengths briefly
+- Clearly but kindly naming the critical skill gaps
+- Giving 2-3 concrete, actionable improvement suggestions
+- Encouraging reapplication after improvement
+
+Return ONLY a valid JSON array — no markdown fences, no extra text:
+[{"name":"Candidate Name","subject":"Re: Your Application","body":"Full email text..."}]
+
+One object per candidate. If only one candidate, return a single-item array.
+
+REJECTION ANALYSIS:
+${result}`,
+          }],
+        });
+
+        const raw = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '[]';
+        const json = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
+        const emails = JSON.parse(json);
+        res.json({ emails });
+      } catch (err: any) {
+        console.error('Rejection email error:', err);
+        res.status(500).json({ error: 'Failed to generate rejection email.' });
+      }
+    });
+
     // ── Hiring Manager Report Generator ─────────────────────────────────────────
     // Each candidate → 2 parallel sub-calls (core + detail) so neither call
     // can exceed its token budget and produce truncated JSON.
