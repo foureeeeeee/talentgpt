@@ -1657,19 +1657,12 @@ ${cvText.slice(0, 6000)}`,
         }
 
         const perEmails = await withConcurrency(cvs, 50, async (cv: any) => {
-          const cvText = cv.content?.trim() || '(No CV content provided)';
-          const jdSection = jobDescription?.trim()
-            ? `\n\nJOB DESCRIPTION:\n${jobDescription}\n`
-            : '';
-          const r = await anthropic.messages.create({
-            model: 'claude-haiku-4-5',
-            max_tokens: 1024,
-            system: SECURITY_PREAMBLE,
-            messages: [{
-              role: 'user',
-              content: `You are an empathetic HR professional writing a rejection email for a job applicant.
+          const singleContent: any[] = [];
+          singleContent.push({
+            type: 'text',
+            text: `You are an empathetic HR professional writing a rejection email for a job applicant.
 
-Based on the candidate's CV${jobDescription?.trim() ? ' and the job description' : ''}, identify the key skill gaps and write a professional, compassionate rejection email. The email should:
+Based on the candidate's CV${jobDescription?.trim() ? ' and the job description' : ''}, identify key skill gaps and write a professional, compassionate rejection email. The email should:
 - Open with a warm, respectful acknowledgement
 - Briefly mention 1-2 genuine strengths from their CV
 - Clearly but kindly name 2-3 critical missing skills or gaps
@@ -1677,18 +1670,35 @@ Based on the candidate's CV${jobDescription?.trim() ? ' and the job description'
 - Encourage them to reapply once they've addressed the gaps
 - Close warmly
 
+Also extract the candidate's email address from their CV if present.
+
 Return ONLY a valid JSON object — no markdown fences:
-{"subject":"Your subject line here","body":"Full email text here"}
-${jdSection}
-CANDIDATE: ${cv.name}
-CV:
-${cvText}`,
-            }],
+{"subject":"Your subject line here","body":"Full email text here","candidateEmail":"their@email.com"}
+If no email found, use null for candidateEmail.
+${jobDescription?.trim() ? `\nJOB DESCRIPTION:\n${jobDescription}` : ''}
+CANDIDATE: ${cv.name}`,
+          });
+          if (cv.type === 'pdf' && cv.fileData) {
+            const b64 = cv.fileData.includes(',') ? cv.fileData.split(',')[1] : cv.fileData;
+            singleContent.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } } as any);
+          } else if (cv.type === 'linkedin') {
+            singleContent.push({ type: 'text', text: cv.content?.trim() || '(LinkedIn profile not provided)' });
+          } else {
+            singleContent.push({ type: 'text', text: cv.content?.trim() || '(No CV text provided)' });
+          }
+          const safe = singleContent.filter((b: any) => b.type !== 'text' || b.text?.trim());
+          const r = await anthropic.messages.create({
+            model: 'claude-haiku-4-5',
+            max_tokens: 1024,
+            system: SECURITY_PREAMBLE,
+            messages: [{ role: 'user', content: safe }],
           });
           const raw = r.content[0]?.type === 'text' ? r.content[0].text.trim() : '{}';
           const json = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
           const parsed = JSON.parse(json);
-          return { name: cv.name, subject: parsed.subject ?? 'Re: Your Application', body: parsed.body ?? '' };
+          const candidateEmail = typeof parsed.candidateEmail === 'string' && parsed.candidateEmail !== 'null'
+            ? parsed.candidateEmail : '';
+          return { name: cv.name, subject: parsed.subject ?? 'Re: Your Application', body: parsed.body ?? '', candidateEmail };
         });
 
         res.json({ emails: perEmails });

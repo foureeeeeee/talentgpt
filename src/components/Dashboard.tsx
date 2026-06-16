@@ -348,10 +348,13 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
 
   // Rejection email
   const [showRejEmail, setShowRejEmail] = useState(false);
-  const [rejEmails, setRejEmails] = useState<{ name: string; subject: string; body: string }[]>([]);
+  const [rejEmails, setRejEmails] = useState<{ name: string; subject: string; body: string; candidateEmail: string }[]>([]);
   const [rejEmailIdx, setRejEmailIdx] = useState(0);
   const [rejEmailLoading, setRejEmailLoading] = useState(false);
   const [rejEmailTo, setRejEmailTo] = useState('');
+
+  // Shortlist email To: field
+  const [shortlistEmailTo, setShortlistEmailTo] = useState('');
 
   // JD Bias Audit
   const [showBiasAudit, setShowBiasAudit] = useState(false);
@@ -569,6 +572,7 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
       });
       const d = await r.json();
       setRejEmails(d.emails ?? []);
+      setRejEmailTo(d.emails?.[0]?.candidateEmail ?? '');
     } catch {
       setRejEmails([]);
     } finally {
@@ -1134,7 +1138,7 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
                   {/* Email Shortlist */}
                   {active.candidates.length > 0 && (
                     <button
-                      onClick={() => aiActive && setShowEmail(true)}
+                      onClick={() => { if (aiActive) { setShortlistEmailTo(''); setShowEmail(true); } }}
                       disabled={!aiActive}
                       title={aiActive ? 'Generate recruiter email shortlist for hiring manager' : 'Run AI scoring first to enable email shortlist'}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-40 disabled:cursor-not-allowed text-gray-600 border-gray-200 hover:border-blue-400 hover:text-blue-700 hover:bg-blue-50 disabled:hover:border-gray-200 disabled:hover:text-gray-600 disabled:hover:bg-transparent"
@@ -1972,16 +1976,34 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
                 ].join('\n');
 
                 return (
-                  <div>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-xs font-medium text-gray-500 block mb-1">To</label>
+                      <input
+                        type="email"
+                        value={shortlistEmailTo}
+                        onChange={ev => setShortlistEmailTo(ev.target.value)}
+                        placeholder="hiring-manager@company.com"
+                        className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                      />
+                    </div>
                     <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 font-mono text-xs text-gray-700 whitespace-pre-wrap leading-relaxed">
                       {emailBody}
                     </div>
-                    <button
-                      onClick={() => navigator.clipboard.writeText(emailBody)}
-                      className="mt-3 flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-xs font-semibold rounded-lg hover:bg-gray-700 transition-all"
-                    >
-                      Copy to Clipboard
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => navigator.clipboard.writeText(emailBody)}
+                        className="flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-xs font-semibold rounded-lg hover:bg-gray-700 transition-all"
+                      >
+                        <Copy className="w-3.5 h-3.5" /> Copy to Clipboard
+                      </button>
+                      <a
+                        href={`mailto:${shortlistEmailTo}?subject=${encodeURIComponent('Candidate Shortlist — ' + active.title)}&body=${encodeURIComponent(emailBody)}`}
+                        className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-700 text-xs font-semibold rounded-lg hover:bg-gray-50 transition-all"
+                      >
+                        <Mail className="w-3.5 h-3.5" /> Open in Email Client
+                      </a>
+                    </div>
                   </div>
                 );
               })()}
@@ -2015,7 +2037,7 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
                   {rejEmails.length > 1 && (
                     <div className="flex gap-2 flex-wrap">
                       {rejEmails.map((e, i) => (
-                        <button key={i} onClick={() => { setRejEmailIdx(i); setRejEmailTo(''); }}
+                        <button key={i} onClick={() => { setRejEmailIdx(i); setRejEmailTo(e.candidateEmail ?? ''); }}
                           className={`text-xs px-3 py-1 rounded-full border transition-all ${i === rejEmailIdx ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
                           {e.name}
                         </button>
