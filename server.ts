@@ -1,3 +1,8 @@
+import { federationRouter, requireGovernance, requireCapability }
+  from './src/governance/governanceClient';
+
+app.use('/api/federation', federationRouter());
+app.use('/api', requireGovernance());
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
