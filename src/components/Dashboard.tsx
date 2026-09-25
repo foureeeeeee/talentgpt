@@ -5,7 +5,7 @@ import {
   RotateCcw, Code2, Clock, Zap, BookOpen, Heart, SlidersHorizontal,
   Loader2, AlertCircle, TrendingUp, ShieldCheck, AlertTriangle, Sparkles,
   Fingerprint, ChevronUp, ClipboardList, Maximize2,
-  TrendingDown, Mail, Eye, EyeOff, Filter, Layers, Copy,
+  TrendingDown, Mail, Eye, EyeOff, Filter, Layers, Copy, Trash2,
 } from 'lucide-react';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
@@ -300,12 +300,14 @@ interface DashboardProps {
   onNewJob: () => void;
   onEditProject: (id: string) => void;
   onAddCandidates: (projectId: string) => void;
+  onDeleteProject: (projectId: string) => void;
+  onDeleteCandidate: (projectId: string, candidateId: string) => void;
   onRunAnalysis: (projectId: string, candidateIds: string[], allFilterScores: Record<string, Record<string, any>>, activeFilter: string) => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, onRunAnalysis }: DashboardProps) {
+export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, onDeleteProject, onDeleteCandidate, onRunAnalysis }: DashboardProps) {
   const [activeId, setActiveId]         = useState<string>(projects[0]?.id ?? '');
   const [selected, setSelected]         = useState<Set<string>>(new Set());
   const [hovered, setHovered]           = useState<{ id: string; rect: DOMRect } | null>(null);
@@ -492,6 +494,11 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
     setInjAiResults([]); setInjAiScanned(false);
     setSparkPoints({}); setShowSparks(false);
   }, []);
+
+  // Active job was deleted (or never existed) — fall back to the first remaining job
+  useEffect(() => {
+    if (!projects.some(p => p.id === activeId)) switchProject(projects[0]?.id ?? '');
+  }, [projects, activeId, switchProject]);
 
   // ── Stage helpers ──────────────────────────────────────────────────────────────
   const getStage = useCallback((cvId: string): CandidateStage => {
@@ -767,6 +774,20 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
   const restoreOne = useCallback((id: string) => setArchivedIds(prev => { const s = new Set(prev); s.delete(id); return s; }), []);
   const restoreAll = () => setArchivedIds(new Set());
 
+  // ── Delete ────────────────────────────────────────────────────────────────────
+  const deleteJob = () => {
+    if (!active) return;
+    if (!window.confirm(`Delete job "${active.title}" and its ${active.candidates.length} candidate(s)? This can't be undone.`)) return;
+    onDeleteProject(active.id);
+  };
+  const deleteCandidate = (cv: CV) => {
+    if (!active) return;
+    if (!window.confirm(`Delete candidate "${cv.name}" from this job? This can't be undone.`)) return;
+    onDeleteCandidate(active.id, cv.id);
+    setSelected(prev => { const s = new Set(prev); s.delete(cv.id); return s; });
+    setArchivedIds(prev => { const s = new Set(prev); s.delete(cv.id); return s; });
+  };
+
   // ── Tooltip ───────────────────────────────────────────────────────────────────
   const hoveredCv      = useMemo(() => active?.candidates.find(c => c.id === hovered?.id) ?? null, [hovered, active]);
   const hoveredOrigIdx = useMemo(() => active?.candidates.findIndex(c => c.id === hovered?.id) ?? 0, [hovered, active]);
@@ -986,6 +1007,13 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
                       <Archive className="w-3 h-3 shrink-0" />
                       Archive candidate
                     </button>
+                    <button
+                      onClick={e => { e.stopPropagation(); setOpenStageMenu(null); deleteCandidate(cv); }}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[10px] font-medium text-red-500 hover:bg-red-50 transition-all"
+                    >
+                      <Trash2 className="w-3 h-3 shrink-0" />
+                      Delete candidate
+                    </button>
                   </div>
                 </div>
               )}
@@ -1041,6 +1069,12 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
                     {archivedIds.size > 0 && <><span className="text-gray-200">·</span><span className="text-orange-500">{archivedIds.size} archived</span></>}
                   </p>
                 </div>
+                <div className="flex items-center gap-2 shrink-0">
+                <button onClick={deleteJob} title="Delete job"
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-red-500 border border-red-200 rounded-lg hover:bg-red-50 hover:text-red-700 transition-all shrink-0">
+                  <Trash2 className="w-3 h-3" />
+                  Delete job
+                </button>
                 <button
                   onClick={() => setActionsOpen(v => !v)}
                   title={actionsOpen ? 'Collapse actions' : 'Expand actions'}
@@ -1049,6 +1083,7 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
                   Actions
                   <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${actionsOpen ? 'rotate-180' : ''}`} />
                 </button>
+                </div>
               </div>
               {/* Collapsible action buttons */}
               {actionsOpen && (
@@ -1604,6 +1639,10 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
                                 <button onClick={() => restoreOne(item.cv.id)}
                                   className="ml-auto flex items-center gap-1 text-[10px] text-blue-500 hover:text-blue-700 font-medium shrink-0">
                                   <RotateCcw className="w-3 h-3" /> Restore
+                                </button>
+                                <button onClick={() => deleteCandidate(item.cv)}
+                                  className="flex items-center gap-1 text-[10px] text-red-500 hover:text-red-700 font-medium shrink-0">
+                                  <Trash2 className="w-3 h-3" /> Delete
                                 </button>
                               </div>
                             );
