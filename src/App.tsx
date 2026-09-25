@@ -146,6 +146,16 @@ export default function App() {
     setPhase('input');
   };
 
+  const handleDeleteProject = (id: string) => {
+    setProjects(prev => prev.filter(p => p.id !== id));
+  };
+
+  const handleDeleteCandidate = (projectId: string, candidateId: string) => {
+    setProjects(prev => prev.map(p =>
+      p.id === projectId ? { ...p, candidates: p.candidates.filter(c => c.id !== candidateId) } : p
+    ));
+  };
+
   const handleCancelInput = () => {
     setEditId(null);
     setPhase('dashboard');
@@ -301,6 +311,8 @@ export default function App() {
             onNewJob={handleNewJob}
             onEditProject={handleEditProject}
             onAddCandidates={handleAddCandidates}
+            onDeleteProject={handleDeleteProject}
+            onDeleteCandidate={handleDeleteCandidate}
             onRunAnalysis={handleRunAnalysis}
           />
         )}
