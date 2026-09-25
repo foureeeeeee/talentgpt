@@ -1,11 +1,12 @@
 import 'dotenv/config';
 import express from 'express';
 import { federationRouter, requireGovernance, requireCapability }
-  from './src/governance/governanceClient';
+  from './src/governance/governanceClient.js';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
 import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
+// import.meta.url is empty in the CJS bundle (npm start); fall back to __filename there
+const require = createRequire(typeof __filename !== 'undefined' ? __filename : import.meta.url);
 const pdfParse: (buffer: Buffer) => Promise<{ text: string }> = require('pdf-parse');
 const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
 const { jsonrepair }: { jsonrepair: (s: string) => string } = require('jsonrepair');
