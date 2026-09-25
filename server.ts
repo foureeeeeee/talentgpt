@@ -710,10 +710,12 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Allow embedding in VS Code / editor preview panels
+  // Allow embedding in VS Code / editor preview panels and the People & Governance workspace
+  const pgOrigins = String(process.env.VITE_PG_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const frameAncestors = ["'self'", 'vscode-webview:', 'vscode-file:', 'http://localhost:*', 'http://127.0.0.1:*', ...pgOrigins].join(' ');
   app.use((_req, res, next) => {
     res.removeHeader('X-Frame-Options');
-    res.setHeader('Content-Security-Policy', "frame-ancestors 'self' vscode-webview: vscode-file: http://localhost:* http://127.0.0.1:*");
+    res.setHeader('Content-Security-Policy', `frame-ancestors ${frameAncestors}`);
     next();
   });
 
