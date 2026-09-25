@@ -9,6 +9,7 @@ import { InputSection } from './components/InputSection';
 import { AnalysisResults } from './components/AnalysisResults';
 import { Dashboard } from './components/Dashboard';
 import { AnalysisModule, CV, JobProject, OutputPhase } from './types';
+import { usePgHandoff } from './pgHandoff';
 import { ChevronRight, ArrowLeft, FileText, BarChart2 } from 'lucide-react';
 
 export const MODULE_LABELS: Record<AnalysisModule, string> = {
@@ -89,6 +90,9 @@ export default function App() {
 
   // Persist projects whenever they change
   useEffect(() => { saveProjects(projects); }, [projects]);
+
+  // Accept project handoffs from People & Governance (replaces any earlier copy of the same ref)
+  usePgHandoff((p) => setProjects((prev) => [p, ...prev.filter((x) => x.id !== p.id)]));
 
   // Keep a ref so runAnalysis never has stale closures
   const analysisDataRef = useRef({ cvs, jobDescription, managerNotes });

@@ -1,10 +1,7 @@
-import { federationRouter, requireGovernance, requireCapability }
-  from './src/governance/governanceClient';
-
-app.use('/api/federation', federationRouter());
-app.use('/api', requireGovernance());
 import 'dotenv/config';
 import express from 'express';
+import { federationRouter, requireGovernance, requireCapability }
+  from './src/governance/governanceClient';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import Anthropic from '@anthropic-ai/sdk';
@@ -710,15 +707,21 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Allow embedding in VS Code / editor preview panels
+  // Allow embedding in VS Code / editor preview panels and the People & Governance workspace
+  const pgOrigins = String(process.env.VITE_PG_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const frameAncestors = ["'self'", 'vscode-webview:', 'vscode-file:', 'http://localhost:*', 'http://127.0.0.1:*', ...pgOrigins].join(' ');
   app.use((_req, res, next) => {
     res.removeHeader('X-Frame-Options');
-    res.setHeader('Content-Security-Policy', "frame-ancestors 'self' vscode-webview: vscode-file: http://localhost:* http://127.0.0.1:*");
+    res.setHeader('Content-Security-Policy', `frame-ancestors ${frameAncestors}`);
     next();
   });
 
   // Middleware for parsing JSON with a larger payload limit for multiple CVs
   app.use(express.json({ limit: '50mb' }));
+
+  // GRETECH governance hub: federation endpoint, then require a valid token on all other /api routes
+  app.use('/api/federation', federationRouter());
+  app.use('/api', requireGovernance());
 
   // API endpoints
   app.post('/api/analyze', async (req, res) => {
