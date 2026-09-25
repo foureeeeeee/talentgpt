@@ -1167,7 +1167,7 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
                       disabled={biasLoading}
                       title="Scan job description for bias patterns (gender, age, exclusionary language)"
                       className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${
-                        biasResult ? (biasResult.overallRisk === 'high' ? 'text-red-600 border-red-200 bg-red-50' : biasResult.overallRisk === 'moderate' ? 'text-amber-600 border-amber-200 bg-amber-50' : 'text-emerald-600 border-emerald-200 bg-emerald-50')
+                        biasResult && biasResult.overallRisk !== 'error' ? (biasResult.overallRisk === 'high' ? 'text-red-600 border-red-200 bg-red-50' : biasResult.overallRisk === 'moderate' ? 'text-amber-600 border-amber-200 bg-amber-50' : 'text-emerald-600 border-emerald-200 bg-emerald-50')
                         : 'text-gray-600 border-gray-200 hover:border-rose-400 hover:text-rose-700 hover:bg-rose-50'
                       } disabled:opacity-50`}
                     >
@@ -2172,21 +2172,27 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 sticky top-0 bg-white rounded-t-2xl z-10">
               <div>
                 <h2 className="font-bold text-gray-900">JD Bias Audit</h2>
-                <p className="text-xs text-gray-400 mt-0.5">{biasResult.summary}</p>
+                {biasResult.overallRisk !== 'error' && <p className="text-xs text-gray-400 mt-0.5">{biasResult.summary}</p>}
               </div>
               <div className="flex items-center gap-3">
-                <span className={`px-3 py-1 text-xs font-bold rounded-full ${
+                {biasResult.overallRisk !== 'error' && <span className={`px-3 py-1 text-xs font-bold rounded-full ${
                   biasResult.overallRisk === 'high' ? 'bg-red-100 text-red-700' :
                   biasResult.overallRisk === 'moderate' ? 'bg-amber-100 text-amber-700' :
                   'bg-emerald-100 text-emerald-700'
                 }`}>
                   {biasResult.overallRisk?.toUpperCase()} RISK
-                </span>
+                </span>}
                 <button onClick={() => setShowBiasAudit(false)} className="text-gray-400 hover:text-gray-700"><X className="w-4 h-4" /></button>
               </div>
             </div>
             <div className="p-6 space-y-3">
-              {biasResult.flags.length === 0 ? (
+              {biasResult.overallRisk === 'error' ? (
+                <div className="text-center py-8">
+                  <AlertCircle className="w-6 h-6 text-red-500 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-gray-700">The bias audit could not run</p>
+                  <p className="text-xs text-red-600 mt-1 break-words">{biasResult.summary}</p>
+                </div>
+              ) : biasResult.flags.length === 0 ? (
                 <div className="text-center py-8 text-gray-400">
                   <p className="text-2xl mb-2">✅</p>
                   <p className="text-sm font-medium text-gray-600">No bias patterns detected</p>

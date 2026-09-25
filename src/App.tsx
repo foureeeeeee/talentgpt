@@ -10,6 +10,7 @@ import { AnalysisResults } from './components/AnalysisResults';
 import { Dashboard } from './components/Dashboard';
 import { AnalysisModule, CV, JobProject, OutputPhase } from './types';
 import { usePgHandoff } from './pgHandoff';
+import { AccessCodePrompt } from './components/AccessCodePrompt';
 import { ChevronRight, ArrowLeft, FileText, BarChart2 } from 'lucide-react';
 
 export const MODULE_LABELS: Record<AnalysisModule, string> = {
@@ -222,6 +223,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-gray-50 w-full overflow-hidden text-gray-900 font-sans">
+      <AccessCodePrompt />
       {phase === 'analysis' && (
         <Sidebar
           activeModule={activeModule}
