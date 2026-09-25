@@ -1,10 +1,7 @@
-import { federationRouter, requireGovernance, requireCapability }
-  from './src/governance/governanceClient';
-
-app.use('/api/federation', federationRouter());
-app.use('/api', requireGovernance());
 import 'dotenv/config';
 import express from 'express';
+import { federationRouter, requireGovernance, requireCapability }
+  from './src/governance/governanceClient';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import Anthropic from '@anthropic-ai/sdk';
@@ -721,6 +718,10 @@ async function startServer() {
 
   // Middleware for parsing JSON with a larger payload limit for multiple CVs
   app.use(express.json({ limit: '50mb' }));
+
+  // GRETECH governance hub: federation endpoint, then require a valid token on all other /api routes
+  app.use('/api/federation', federationRouter());
+  app.use('/api', requireGovernance());
 
   // API endpoints
   app.post('/api/analyze', async (req, res) => {
