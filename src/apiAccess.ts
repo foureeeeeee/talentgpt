@@ -20,6 +20,14 @@ function saveAccessCode(code: string) {
 
 let sessionCode = '';
 
+/**
+ * Access code handed over by People & Governance for users with governance access.
+ * Memory only, never stored, so opening TalentGPT directly by link still asks for the code.
+ */
+export function setSessionAccessCode(code: string) {
+  sessionCode = code;
+}
+
 /** Registers the prompt component; returns an unsubscribe function. */
 export function onAccessPrompt(fn: (open: boolean) => void) {
   showPrompt = fn;
