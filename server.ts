@@ -3,7 +3,6 @@ import express from 'express';
 import { federationRouter, requireGovernance, requireCapability }
   from './src/governance/governanceClient';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import Anthropic from '@anthropic-ai/sdk';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
@@ -703,9 +702,10 @@ async function withConcurrency<T, R>(
   return results;
 }
 
-async function startServer() {
+// Builds the Express app with every API route. Used by the local server below and,
+// on Vercel, by api/index.ts (where the SPA itself is served as static files).
+export function createApp() {
   const app = express();
-  const PORT = 3000;
 
   // Allow embedding in VS Code / editor preview panels and the People & Governance workspace
   const pgOrigins = String(process.env.VITE_PG_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -1575,51 +1575,45 @@ ${pool.map(({ cv, text }, i) => `\n[CANDIDATE ${i + 1}]\nID: ${cv.id}\nName: ${c
     }
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    // ── PDF vision OCR — for PDFs with no text layer ────────────────────────────
-    app.post('/api/extract-pdf-text-vision', async (req, res) => {
-      const { pages } = req.body as { pages: string[] };
-      if (!pages?.length) return res.json({ text: '' });
-      try {
-        const content: any[] = [{
-          type: 'text',
-          text: 'These are pages from a CV/resume. Extract ALL the text exactly as it appears, preserving sections and structure. Return only the extracted text, nothing else.',
-        }];
-        for (const page of pages.slice(0, 8)) {
-          const base64 = page.includes(',') ? page.split(',')[1] : page;
-          content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } });
-        }
-        const response = await anthropic.messages.create({
-          model: 'claude-haiku-4-5',
-          max_tokens: 4096,
-          messages: [{ role: 'user', content }],
-        });
-        const text = response.content[0].type === 'text' ? response.content[0].text.trim() : '';
-        console.log(`[extract-pdf-text-vision] extracted ${text.length} chars from ${pages.length} pages`);
-        res.json({ text });
-      } catch (err: any) {
-        console.error('[extract-pdf-text-vision] error:', err.message);
-        res.status(500).json({ error: err.message });
+  // ── PDF vision OCR — for PDFs with no text layer ────────────────────────────
+  app.post('/api/extract-pdf-text-vision', async (req, res) => {
+    const { pages } = req.body as { pages: string[] };
+    if (!pages?.length) return res.json({ text: '' });
+    try {
+      const content: any[] = [{
+        type: 'text',
+        text: 'These are pages from a CV/resume. Extract ALL the text exactly as it appears, preserving sections and structure. Return only the extracted text, nothing else.',
+      }];
+      for (const page of pages.slice(0, 8)) {
+        const base64 = page.includes(',') ? page.split(',')[1] : page;
+        content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } });
       }
-    });
+      const response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5',
+        max_tokens: 4096,
+        messages: [{ role: 'user', content }],
+      });
+      const text = response.content[0].type === 'text' ? response.content[0].text.trim() : '';
+      console.log(`[extract-pdf-text-vision] extracted ${text.length} chars from ${pages.length} pages`);
+      res.json({ text });
+    } catch (err: any) {
+      console.error('[extract-pdf-text-vision] error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
 
-    // ── Evidence Locator ────────────────────────────────────────────────────────
-    app.post('/api/locate-evidence', async (req, res) => {
-      const { cvText } = req.body as { cvText: string };
-      if (!cvText?.trim()) return res.json({ highlights: [] });
+  // ── Evidence Locator ────────────────────────────────────────────────────────
+  app.post('/api/locate-evidence', async (req, res) => {
+    const { cvText } = req.body as { cvText: string };
+    if (!cvText?.trim()) return res.json({ highlights: [] });
 
-      try {
-        const response = await anthropic.messages.create({
-          model: 'claude-haiku-4-5',
-          max_tokens: 2048,
-          messages: [{
-            role: 'user',
-            content: `You are an Evidence Locator. I will provide a candidate CV in plain text.
+    try {
+      const response = await anthropic.messages.create({
+        model: 'claude-haiku-4-5',
+        max_tokens: 2048,
+        messages: [{
+          role: 'user',
+          content: `You are an Evidence Locator. I will provide a candidate CV in plain text.
 
 Your task is to identify evidence that supports these categories:
 - Technical Skills
@@ -1642,33 +1636,33 @@ Output format:
 
 CV TEXT:
 ${cvText.slice(0, 6000)}`,
-          }],
-        });
+        }],
+      });
 
-        const raw = response.content[0].type === 'text' ? response.content[0].text : '{}';
-        const match = raw.match(/\{[\s\S]*\}/);
-        const parsed = match ? JSON.parse(match[0]) : { highlights: [] };
-        res.json(parsed);
-      } catch (err: any) {
-        res.status(500).json({ error: err.message, highlights: [] });
+      const raw = response.content[0].type === 'text' ? response.content[0].text : '{}';
+      const match = raw.match(/\{[\s\S]*\}/);
+      const parsed = match ? JSON.parse(match[0]) : { highlights: [] };
+      res.json(parsed);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message, highlights: [] });
+    }
+  });
+
+  // ── Rejection Email Generator ────────────────────────────────────────────────
+  // Accepts cvs[] + jobDescription; generates one personalised rejection email
+  // per candidate (missing skills + improvement roadmap) using withConcurrency.
+  app.post('/api/rejection-email', async (req, res) => {
+    try {
+      const { cvs, jobDescription } = req.body;
+      if (!Array.isArray(cvs) || cvs.length === 0) {
+        return res.status(400).json({ error: 'No candidates provided.' });
       }
-    });
 
-    // ── Rejection Email Generator ────────────────────────────────────────────────
-    // Accepts cvs[] + jobDescription; generates one personalised rejection email
-    // per candidate (missing skills + improvement roadmap) using withConcurrency.
-    app.post('/api/rejection-email', async (req, res) => {
-      try {
-        const { cvs, jobDescription } = req.body;
-        if (!Array.isArray(cvs) || cvs.length === 0) {
-          return res.status(400).json({ error: 'No candidates provided.' });
-        }
-
-        const perEmails = await withConcurrency(cvs, 50, async (cv: any) => {
-          const singleContent: any[] = [];
-          singleContent.push({
-            type: 'text',
-            text: `You are an empathetic HR professional writing a rejection email for a job applicant.
+      const perEmails = await withConcurrency(cvs, 50, async (cv: any) => {
+        const singleContent: any[] = [];
+        singleContent.push({
+          type: 'text',
+          text: `You are an empathetic HR professional writing a rejection email for a job applicant.
 
 Based on the candidate's CV${jobDescription?.trim() ? ' and the job description' : ''}, identify key skill gaps and write a professional, compassionate rejection email. The email should:
 - Open with a warm, respectful acknowledgement
@@ -1685,96 +1679,96 @@ Return ONLY a valid JSON object — no markdown fences:
 If no email found, use null for candidateEmail.
 ${jobDescription?.trim() ? `\nJOB DESCRIPTION:\n${jobDescription}` : ''}
 CANDIDATE: ${cv.name}`,
-          });
-          if (cv.type === 'pdf' && cv.fileData) {
-            const b64 = cv.fileData.includes(',') ? cv.fileData.split(',')[1] : cv.fileData;
-            singleContent.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } } as any);
-          } else if (cv.type === 'linkedin') {
-            singleContent.push({ type: 'text', text: cv.content?.trim() || '(LinkedIn profile not provided)' });
-          } else {
-            singleContent.push({ type: 'text', text: cv.content?.trim() || '(No CV text provided)' });
-          }
-          const safe = singleContent.filter((b: any) => b.type !== 'text' || b.text?.trim());
-          const r = await anthropic.messages.create({
-            model: 'claude-haiku-4-5',
-            max_tokens: 1024,
-            system: SECURITY_PREAMBLE,
-            messages: [{ role: 'user', content: safe }],
-          });
-          const raw = r.content[0]?.type === 'text' ? r.content[0].text.trim() : '{}';
-          const json = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
-          const parsed = JSON.parse(json);
-          const candidateEmail = typeof parsed.candidateEmail === 'string' && parsed.candidateEmail !== 'null'
-            ? parsed.candidateEmail : '';
-          return { name: cv.name, subject: parsed.subject ?? 'Re: Your Application', body: parsed.body ?? '', candidateEmail };
         });
+        if (cv.type === 'pdf' && cv.fileData) {
+          const b64 = cv.fileData.includes(',') ? cv.fileData.split(',')[1] : cv.fileData;
+          singleContent.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } } as any);
+        } else if (cv.type === 'linkedin') {
+          singleContent.push({ type: 'text', text: cv.content?.trim() || '(LinkedIn profile not provided)' });
+        } else {
+          singleContent.push({ type: 'text', text: cv.content?.trim() || '(No CV text provided)' });
+        }
+        const safe = singleContent.filter((b: any) => b.type !== 'text' || b.text?.trim());
+        const r = await anthropic.messages.create({
+          model: 'claude-haiku-4-5',
+          max_tokens: 1024,
+          system: SECURITY_PREAMBLE,
+          messages: [{ role: 'user', content: safe }],
+        });
+        const raw = r.content[0]?.type === 'text' ? r.content[0].text.trim() : '{}';
+        const json = raw.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
+        const parsed = JSON.parse(json);
+        const candidateEmail = typeof parsed.candidateEmail === 'string' && parsed.candidateEmail !== 'null'
+          ? parsed.candidateEmail : '';
+        return { name: cv.name, subject: parsed.subject ?? 'Re: Your Application', body: parsed.body ?? '', candidateEmail };
+      });
 
-        res.json({ emails: perEmails });
-      } catch (err: any) {
-        console.error('Rejection email error:', err);
-        res.status(500).json({ error: 'Failed to generate rejection emails.' });
+      res.json({ emails: perEmails });
+    } catch (err: any) {
+      console.error('Rejection email error:', err);
+      res.status(500).json({ error: 'Failed to generate rejection emails.' });
+    }
+  });
+
+  // ── Hiring Manager Report Generator ─────────────────────────────────────────
+  // Each candidate → 2 parallel sub-calls (core + detail) so neither call
+  // can exceed its token budget and produce truncated JSON.
+  app.post('/api/generate-report', async (req, res) => {
+    try {
+      const { candidates, jobDescription } = req.body as {
+        candidates: { id: string; name: string; content: string }[];
+        jobDescription?: string;
+      };
+      if (!candidates?.length) return res.status(400).json({ error: 'No candidates provided' });
+
+      const jd = (jobDescription?.trim() || '(Not provided)').slice(0, 800);
+
+      // Safely parse JSON from a Claude response — tries native parse first,
+      // then jsonrepair for common LLM formatting issues (missing commas,
+      // unescaped quotes, truncated output, special characters, etc.)
+      function parseJson(raw: string, label: string): any {
+        const stripped = raw
+          .replace(/^```(?:json)?\s*/i, '')
+          .replace(/```\s*$/i, '')
+          .trim();
+
+        // Try to extract the outermost JSON object
+        const m = stripped.match(/\{[\s\S]*\}/);
+        const candidate = m ? m[0] : stripped;
+
+        // 1. Direct parse
+        try { return JSON.parse(candidate); } catch { /* fall through */ }
+
+        // 2. jsonrepair — fixes missing commas, unclosed brackets, bad escapes, etc.
+        try { return JSON.parse(jsonrepair(candidate)); } catch { /* fall through */ }
+
+        // 3. jsonrepair on the full stripped text (in case braces regex missed something)
+        try { return JSON.parse(jsonrepair(stripped)); } catch (e: any) {
+          throw new Error(`[generate-report] Could not parse JSON for ${label}: ${e.message}`);
+        }
       }
-    });
 
-    // ── Hiring Manager Report Generator ─────────────────────────────────────────
-    // Each candidate → 2 parallel sub-calls (core + detail) so neither call
-    // can exceed its token budget and produce truncated JSON.
-    app.post('/api/generate-report', async (req, res) => {
-      try {
-        const { candidates, jobDescription } = req.body as {
-          candidates: { id: string; name: string; content: string }[];
-          jobDescription?: string;
-        };
-        if (!candidates?.length) return res.status(400).json({ error: 'No candidates provided' });
-
-        const jd = (jobDescription?.trim() || '(Not provided)').slice(0, 800);
-
-        // Safely parse JSON from a Claude response — tries native parse first,
-        // then jsonrepair for common LLM formatting issues (missing commas,
-        // unescaped quotes, truncated output, special characters, etc.)
-        function parseJson(raw: string, label: string): any {
-          const stripped = raw
-            .replace(/^```(?:json)?\s*/i, '')
-            .replace(/```\s*$/i, '')
-            .trim();
-
-          // Try to extract the outermost JSON object
-          const m = stripped.match(/\{[\s\S]*\}/);
-          const candidate = m ? m[0] : stripped;
-
-          // 1. Direct parse
-          try { return JSON.parse(candidate); } catch { /* fall through */ }
-
-          // 2. jsonrepair — fixes missing commas, unclosed brackets, bad escapes, etc.
-          try { return JSON.parse(jsonrepair(candidate)); } catch { /* fall through */ }
-
-          // 3. jsonrepair on the full stripped text (in case braces regex missed something)
-          try { return JSON.parse(jsonrepair(stripped)); } catch (e: any) {
-            throw new Error(`[generate-report] Could not parse JSON for ${label}: ${e.message}`);
-          }
+      async function callClaude(prompt: string, max_tokens: number, retries = 2): Promise<Anthropic.Message> {
+        for (let attempt = 0; attempt <= retries; attempt++) {
+          const resp = await anthropic.messages.create({
+            model: 'claude-haiku-4-5',
+            max_tokens,
+            messages: [{ role: 'user', content: prompt }],
+          });
+          if (resp.stop_reason !== 'max_tokens') return resp;
+          if (attempt < retries) console.warn(`[generate-report] max_tokens hit, retrying (${attempt + 1}/${retries})…`);
         }
+        throw new Error('[generate-report] Response still truncated after retries — reduce CV length');
+      }
 
-        async function callClaude(prompt: string, max_tokens: number, retries = 2): Promise<Anthropic.Message> {
-          for (let attempt = 0; attempt <= retries; attempt++) {
-            const resp = await anthropic.messages.create({
-              model: 'claude-haiku-4-5',
-              max_tokens,
-              messages: [{ role: 'user', content: prompt }],
-            });
-            if (resp.stop_reason !== 'max_tokens') return resp;
-            if (attempt < retries) console.warn(`[generate-report] max_tokens hit, retrying (${attempt + 1}/${retries})…`);
-          }
-          throw new Error('[generate-report] Response still truncated after retries — reduce CV length');
-        }
+      // ── Per-candidate: 2 parallel sub-calls ─────────────────────────────
+      const candidateReports = await Promise.all(candidates.map(async (c) => {
+        // Cap CV text so each sub-call input stays bounded
+        const cv = (c.content || '(No CV text available)').slice(0, 2500);
+        const ctx = `JOB: ${jd}\n\nCANDIDATE: ${c.name}\nRESUME:\n${cv}`;
 
-        // ── Per-candidate: 2 parallel sub-calls ─────────────────────────────
-        const candidateReports = await Promise.all(candidates.map(async (c) => {
-          // Cap CV text so each sub-call input stays bounded
-          const cv = (c.content || '(No CV text available)').slice(0, 2500);
-          const ctx = `JOB: ${jd}\n\nCANDIDATE: ${c.name}\nRESUME:\n${cv}`;
-
-          // ── Sub-call A: core scores + summary + recommendation (~1 200 tok) ──
-          const promptA = `You are an AI Hiring Intelligence Assistant.
+        // ── Sub-call A: core scores + summary + recommendation (~1 200 tok) ──
+        const promptA = `You are an AI Hiring Intelligence Assistant.
 Analyse the candidate and output ONLY a valid JSON object — no markdown, no prose.
 Keep ALL text values under 25 words each.
 
@@ -1782,37 +1776,37 @@ ${ctx}
 
 Output EXACTLY this JSON (replace placeholders):
 {
-  "id": ${JSON.stringify(c.id)},
-  "name": ${JSON.stringify(c.name)},
-  "executiveSummary": {
-    "candidateInfo": {
-      "currentPosition": "",
-      "yearsExperience": "",
-      "education": "",
-      "location": "",
-      "availability": "Not specified",
-      "expectedSalary": "Not specified"
-    },
-    "summary": "120-word max overall suitability, strengths, concerns, recommendation"
+"id": ${JSON.stringify(c.id)},
+"name": ${JSON.stringify(c.name)},
+"executiveSummary": {
+  "candidateInfo": {
+    "currentPosition": "",
+    "yearsExperience": "",
+    "education": "",
+    "location": "",
+    "availability": "Not specified",
+    "expectedSalary": "Not specified"
   },
-  "hiringReadiness": {
-    "technicalSkillMatch": { "score": 0, "evidence": "1 sentence" },
-    "relevantExperience":  { "score": 0, "evidence": "1 sentence" },
-    "learningAgility":     { "score": 0, "evidence": "1 sentence" },
-    "communication":       { "score": 0, "evidence": "1 sentence" },
-    "teamCollaboration":   { "score": 0, "evidence": "1 sentence" },
-    "leadershipPotential": { "score": 0, "evidence": "1 sentence" },
-    "overallHireability":  { "score": 0, "explanation": "2 sentences" }
-  },
-  "finalRecommendation": {
-    "decision": "Strong Hire|Hire|Interview Recommended|Consider|Hold|Reject",
-    "justification": "2 sentences"
-  }
+  "summary": "120-word max overall suitability, strengths, concerns, recommendation"
+},
+"hiringReadiness": {
+  "technicalSkillMatch": { "score": 0, "evidence": "1 sentence" },
+  "relevantExperience":  { "score": 0, "evidence": "1 sentence" },
+  "learningAgility":     { "score": 0, "evidence": "1 sentence" },
+  "communication":       { "score": 0, "evidence": "1 sentence" },
+  "teamCollaboration":   { "score": 0, "evidence": "1 sentence" },
+  "leadershipPotential": { "score": 0, "evidence": "1 sentence" },
+  "overallHireability":  { "score": 0, "explanation": "2 sentences" }
+},
+"finalRecommendation": {
+  "decision": "Strong Hire|Hire|Interview Recommended|Consider|Hold|Reject",
+  "justification": "2 sentences"
+}
 }
 Output ONLY the JSON object. Never discriminate on protected characteristics.`;
 
-          // ── Sub-call B: detail sections (~1 800 tok) ──────────────────────
-          const promptB = `You are an AI Hiring Intelligence Assistant.
+        // ── Sub-call B: detail sections (~1 800 tok) ──────────────────────
+        const promptB = `You are an AI Hiring Intelligence Assistant.
 Analyse the candidate and output ONLY a valid JSON object — no markdown, no prose.
 Keep ALL text values under 25 words. Arrays: max 3 items each.
 
@@ -1820,158 +1814,158 @@ ${ctx}
 
 Output EXACTLY this JSON (replace placeholders):
 {
-  "topReasonsToInterview": [
-    { "strength": "", "evidence": "1 sentence", "businessImpact": "1 sentence" },
-    { "strength": "", "evidence": "1 sentence", "businessImpact": "1 sentence" },
-    { "strength": "", "evidence": "1 sentence", "businessImpact": "1 sentence" }
-  ],
-  "biggestConcerns": [
-    { "concern": "", "evidence": "1 sentence", "risk": "1 sentence", "interviewQuestion": "" },
-    { "concern": "", "evidence": "1 sentence", "risk": "1 sentence", "interviewQuestion": "" }
-  ],
-  "hiddenPotential": {
-    "transferableSkills": ["skill1", "skill2", "skill3"],
-    "analysis": "2 sentences",
-    "whyATSMissed": "1 sentence"
-  },
-  "productivityEstimation": {
-    "timeToProductivity": "Immediate|2 Weeks|1 Month|2 Months|3+ Months",
-    "reasoning": "1 sentence",
-    "training": {
-      "technical": ["item1", "item2"],
-      "domain":    ["item1"],
-      "process":   ["item1"]
-    }
-  },
-  "personalityInsights": {
-    "collaboration":  "1 sentence",
-    "initiative":     "1 sentence",
-    "adaptability":   "1 sentence",
-    "ownership":      "1 sentence",
-    "problemSolving": "1 sentence"
-  },
-  "riskAnalysis": {
-    "riskLevel": "Low|Medium|High",
-    "risks": ["risk1", "risk2"],
-    "evidence": "1 sentence"
-  },
-  "salaryAnalysis": {
-    "expected": "",
-    "marketAlignment": "1 sentence",
-    "rejectionRisk":   "1 sentence",
-    "recommendation":  "1 sentence"
-  },
-  "interviewFocusAreas": [
-    { "area": "", "reason": "1 sentence", "question": "" },
-    { "area": "", "reason": "1 sentence", "question": "" },
-    { "area": "", "reason": "1 sentence", "question": "" },
-    { "area": "", "reason": "1 sentence", "question": "" },
-    { "area": "", "reason": "1 sentence", "question": "" }
-  ]
+"topReasonsToInterview": [
+  { "strength": "", "evidence": "1 sentence", "businessImpact": "1 sentence" },
+  { "strength": "", "evidence": "1 sentence", "businessImpact": "1 sentence" },
+  { "strength": "", "evidence": "1 sentence", "businessImpact": "1 sentence" }
+],
+"biggestConcerns": [
+  { "concern": "", "evidence": "1 sentence", "risk": "1 sentence", "interviewQuestion": "" },
+  { "concern": "", "evidence": "1 sentence", "risk": "1 sentence", "interviewQuestion": "" }
+],
+"hiddenPotential": {
+  "transferableSkills": ["skill1", "skill2", "skill3"],
+  "analysis": "2 sentences",
+  "whyATSMissed": "1 sentence"
+},
+"productivityEstimation": {
+  "timeToProductivity": "Immediate|2 Weeks|1 Month|2 Months|3+ Months",
+  "reasoning": "1 sentence",
+  "training": {
+    "technical": ["item1", "item2"],
+    "domain":    ["item1"],
+    "process":   ["item1"]
+  }
+},
+"personalityInsights": {
+  "collaboration":  "1 sentence",
+  "initiative":     "1 sentence",
+  "adaptability":   "1 sentence",
+  "ownership":      "1 sentence",
+  "problemSolving": "1 sentence"
+},
+"riskAnalysis": {
+  "riskLevel": "Low|Medium|High",
+  "risks": ["risk1", "risk2"],
+  "evidence": "1 sentence"
+},
+"salaryAnalysis": {
+  "expected": "",
+  "marketAlignment": "1 sentence",
+  "rejectionRisk":   "1 sentence",
+  "recommendation":  "1 sentence"
+},
+"interviewFocusAreas": [
+  { "area": "", "reason": "1 sentence", "question": "" },
+  { "area": "", "reason": "1 sentence", "question": "" },
+  { "area": "", "reason": "1 sentence", "question": "" },
+  { "area": "", "reason": "1 sentence", "question": "" },
+  { "area": "", "reason": "1 sentence", "question": "" }
+]
 }
 Output ONLY the JSON object. Never discriminate on protected characteristics.`;
 
-          const [respA, respB] = await Promise.all([
-            callClaude(promptA, 1500),
-            callClaude(promptB, 2000),
-          ]);
+        const [respA, respB] = await Promise.all([
+          callClaude(promptA, 1500),
+          callClaude(promptB, 2000),
+        ]);
 
-          const rawA = respA.content[0].type === 'text' ? respA.content[0].text : '{}';
-          const rawB = respB.content[0].type === 'text' ? respB.content[0].text : '{}';
+        const rawA = respA.content[0].type === 'text' ? respA.content[0].text : '{}';
+        const rawB = respB.content[0].type === 'text' ? respB.content[0].text : '{}';
 
-          const coreData   = parseJson(rawA, `core/${c.name}`);
-          const detailData = parseJson(rawB, `detail/${c.name}`);
-          const merged     = { ...coreData, ...detailData };
+        const coreData   = parseJson(rawA, `core/${c.name}`);
+        const detailData = parseJson(rawB, `detail/${c.name}`);
+        const merged     = { ...coreData, ...detailData };
 
-          // Normalize: guarantee every field exists with a safe default so
-          // the client never crashes on missing/null nested properties
-          const s = (v: any, d = '') => (typeof v === 'string' && v.trim() ? v : d);
-          const n = (v: any) => (typeof v === 'number' && !isNaN(v) ? v : 0);
-          const arr = (v: any) => (Array.isArray(v) ? v : []);
-          const sf  = (obj: any) => ({ score: n(obj?.score), evidence: s(obj?.evidence) });
+        // Normalize: guarantee every field exists with a safe default so
+        // the client never crashes on missing/null nested properties
+        const s = (v: any, d = '') => (typeof v === 'string' && v.trim() ? v : d);
+        const n = (v: any) => (typeof v === 'number' && !isNaN(v) ? v : 0);
+        const arr = (v: any) => (Array.isArray(v) ? v : []);
+        const sf  = (obj: any) => ({ score: n(obj?.score), evidence: s(obj?.evidence) });
 
-          return {
-            id:   c.id,
-            name: c.name,
-            executiveSummary: {
-              candidateInfo: {
-                currentPosition: s(merged.executiveSummary?.candidateInfo?.currentPosition),
-                yearsExperience: s(merged.executiveSummary?.candidateInfo?.yearsExperience),
-                education:       s(merged.executiveSummary?.candidateInfo?.education),
-                location:        s(merged.executiveSummary?.candidateInfo?.location),
-                availability:    s(merged.executiveSummary?.candidateInfo?.availability, 'Not specified'),
-                expectedSalary:  s(merged.executiveSummary?.candidateInfo?.expectedSalary, 'Not specified'),
-              },
-              summary: s(merged.executiveSummary?.summary),
+        return {
+          id:   c.id,
+          name: c.name,
+          executiveSummary: {
+            candidateInfo: {
+              currentPosition: s(merged.executiveSummary?.candidateInfo?.currentPosition),
+              yearsExperience: s(merged.executiveSummary?.candidateInfo?.yearsExperience),
+              education:       s(merged.executiveSummary?.candidateInfo?.education),
+              location:        s(merged.executiveSummary?.candidateInfo?.location),
+              availability:    s(merged.executiveSummary?.candidateInfo?.availability, 'Not specified'),
+              expectedSalary:  s(merged.executiveSummary?.candidateInfo?.expectedSalary, 'Not specified'),
             },
-            hiringReadiness: {
-              technicalSkillMatch: sf(merged.hiringReadiness?.technicalSkillMatch),
-              relevantExperience:  sf(merged.hiringReadiness?.relevantExperience),
-              learningAgility:     sf(merged.hiringReadiness?.learningAgility),
-              communication:       sf(merged.hiringReadiness?.communication),
-              teamCollaboration:   sf(merged.hiringReadiness?.teamCollaboration),
-              leadershipPotential: sf(merged.hiringReadiness?.leadershipPotential),
-              overallHireability:  { score: n(merged.hiringReadiness?.overallHireability?.score), explanation: s(merged.hiringReadiness?.overallHireability?.explanation) },
+            summary: s(merged.executiveSummary?.summary),
+          },
+          hiringReadiness: {
+            technicalSkillMatch: sf(merged.hiringReadiness?.technicalSkillMatch),
+            relevantExperience:  sf(merged.hiringReadiness?.relevantExperience),
+            learningAgility:     sf(merged.hiringReadiness?.learningAgility),
+            communication:       sf(merged.hiringReadiness?.communication),
+            teamCollaboration:   sf(merged.hiringReadiness?.teamCollaboration),
+            leadershipPotential: sf(merged.hiringReadiness?.leadershipPotential),
+            overallHireability:  { score: n(merged.hiringReadiness?.overallHireability?.score), explanation: s(merged.hiringReadiness?.overallHireability?.explanation) },
+          },
+          topReasonsToInterview: arr(merged.topReasonsToInterview).map((x: any) => ({
+            strength: s(x?.strength), evidence: s(x?.evidence), businessImpact: s(x?.businessImpact),
+          })),
+          biggestConcerns: arr(merged.biggestConcerns).map((x: any) => ({
+            concern: s(x?.concern), evidence: s(x?.evidence), risk: s(x?.risk), interviewQuestion: s(x?.interviewQuestion),
+          })),
+          hiddenPotential: {
+            transferableSkills: arr(merged.hiddenPotential?.transferableSkills).map((x: any) => s(x)),
+            analysis:     s(merged.hiddenPotential?.analysis),
+            whyATSMissed: s(merged.hiddenPotential?.whyATSMissed),
+          },
+          productivityEstimation: {
+            timeToProductivity: s(merged.productivityEstimation?.timeToProductivity, 'Not specified'),
+            reasoning: s(merged.productivityEstimation?.reasoning),
+            training: {
+              technical: arr(merged.productivityEstimation?.training?.technical).map((x: any) => s(x)),
+              domain:    arr(merged.productivityEstimation?.training?.domain).map((x: any) => s(x)),
+              process:   arr(merged.productivityEstimation?.training?.process).map((x: any) => s(x)),
             },
-            topReasonsToInterview: arr(merged.topReasonsToInterview).map((x: any) => ({
-              strength: s(x?.strength), evidence: s(x?.evidence), businessImpact: s(x?.businessImpact),
-            })),
-            biggestConcerns: arr(merged.biggestConcerns).map((x: any) => ({
-              concern: s(x?.concern), evidence: s(x?.evidence), risk: s(x?.risk), interviewQuestion: s(x?.interviewQuestion),
-            })),
-            hiddenPotential: {
-              transferableSkills: arr(merged.hiddenPotential?.transferableSkills).map((x: any) => s(x)),
-              analysis:     s(merged.hiddenPotential?.analysis),
-              whyATSMissed: s(merged.hiddenPotential?.whyATSMissed),
-            },
-            productivityEstimation: {
-              timeToProductivity: s(merged.productivityEstimation?.timeToProductivity, 'Not specified'),
-              reasoning: s(merged.productivityEstimation?.reasoning),
-              training: {
-                technical: arr(merged.productivityEstimation?.training?.technical).map((x: any) => s(x)),
-                domain:    arr(merged.productivityEstimation?.training?.domain).map((x: any) => s(x)),
-                process:   arr(merged.productivityEstimation?.training?.process).map((x: any) => s(x)),
-              },
-            },
-            personalityInsights: {
-              collaboration:  s(merged.personalityInsights?.collaboration),
-              initiative:     s(merged.personalityInsights?.initiative),
-              adaptability:   s(merged.personalityInsights?.adaptability),
-              ownership:      s(merged.personalityInsights?.ownership),
-              problemSolving: s(merged.personalityInsights?.problemSolving),
-            },
-            riskAnalysis: {
-              riskLevel: (['Low','Medium','High'].includes(merged.riskAnalysis?.riskLevel) ? merged.riskAnalysis.riskLevel : 'Medium') as 'Low'|'Medium'|'High',
-              risks:    arr(merged.riskAnalysis?.risks).map((x: any) => s(x)),
-              evidence: s(merged.riskAnalysis?.evidence),
-            },
-            salaryAnalysis: {
-              expected:        s(merged.salaryAnalysis?.expected),
-              marketAlignment: s(merged.salaryAnalysis?.marketAlignment),
-              rejectionRisk:   s(merged.salaryAnalysis?.rejectionRisk),
-              recommendation:  s(merged.salaryAnalysis?.recommendation),
-            },
-            interviewFocusAreas: arr(merged.interviewFocusAreas).map((x: any) => ({
-              area: s(x?.area), reason: s(x?.reason), question: s(x?.question),
-            })),
-            finalRecommendation: {
-              decision:      s(merged.finalRecommendation?.decision, 'Interview Recommended') as any,
-              justification: s(merged.finalRecommendation?.justification),
-            },
-          };
-        }));
+          },
+          personalityInsights: {
+            collaboration:  s(merged.personalityInsights?.collaboration),
+            initiative:     s(merged.personalityInsights?.initiative),
+            adaptability:   s(merged.personalityInsights?.adaptability),
+            ownership:      s(merged.personalityInsights?.ownership),
+            problemSolving: s(merged.personalityInsights?.problemSolving),
+          },
+          riskAnalysis: {
+            riskLevel: (['Low','Medium','High'].includes(merged.riskAnalysis?.riskLevel) ? merged.riskAnalysis.riskLevel : 'Medium') as 'Low'|'Medium'|'High',
+            risks:    arr(merged.riskAnalysis?.risks).map((x: any) => s(x)),
+            evidence: s(merged.riskAnalysis?.evidence),
+          },
+          salaryAnalysis: {
+            expected:        s(merged.salaryAnalysis?.expected),
+            marketAlignment: s(merged.salaryAnalysis?.marketAlignment),
+            rejectionRisk:   s(merged.salaryAnalysis?.rejectionRisk),
+            recommendation:  s(merged.salaryAnalysis?.recommendation),
+          },
+          interviewFocusAreas: arr(merged.interviewFocusAreas).map((x: any) => ({
+            area: s(x?.area), reason: s(x?.reason), question: s(x?.question),
+          })),
+          finalRecommendation: {
+            decision:      s(merged.finalRecommendation?.decision, 'Interview Recommended') as any,
+            justification: s(merged.finalRecommendation?.justification),
+          },
+        };
+      }));
 
-        // ── Comparison call (only when > 1 candidate, ~1 000 tok output) ────
-        let comparison: any = null;
-        if (candidates.length > 1) {
-          const summaries = candidateReports.map(r =>
-            `${r.name} (id: ${r.id}): overall=${r.hiringReadiness?.overallHireability?.score ?? '?'}, ` +
-            `decision="${r.finalRecommendation?.decision ?? '?'}", ` +
-            `risk=${r.riskAnalysis?.riskLevel ?? '?'}, ` +
-            `readiness="${r.productivityEstimation?.timeToProductivity ?? '?'}"`
-          ).join('\n');
+      // ── Comparison call (only when > 1 candidate, ~1 000 tok output) ────
+      let comparison: any = null;
+      if (candidates.length > 1) {
+        const summaries = candidateReports.map(r =>
+          `${r.name} (id: ${r.id}): overall=${r.hiringReadiness?.overallHireability?.score ?? '?'}, ` +
+          `decision="${r.finalRecommendation?.decision ?? '?'}", ` +
+          `risk=${r.riskAnalysis?.riskLevel ?? '?'}, ` +
+          `readiness="${r.productivityEstimation?.timeToProductivity ?? '?'}"`
+        ).join('\n');
 
-          const compPrompt = `You are an AI Hiring Intelligence Assistant. Compare candidates and output ONLY a valid JSON object — no markdown.
+        const compPrompt = `You are an AI Hiring Intelligence Assistant. Compare candidates and output ONLY a valid JSON object — no markdown.
 Keep justification/evidence fields under 20 words each.
 
 JOB: ${jd}
@@ -1981,58 +1975,58 @@ ${summaries}
 
 Output EXACTLY this JSON (one row per candidate in table and ranking):
 {
-  "table": [
-    { "candidateId": "", "name": "", "hireability": 0, "potential": 0, "risk": "Low|Medium|High", "readiness": "", "recommendation": "" }
-  ],
-  "ranking": [
-    { "rank": 1, "candidateId": "", "name": "", "justification": "1 sentence" }
-  ],
-  "bestImmediateHire": { "candidateId": "", "name": "", "evidence": "1 sentence" },
-  "highestPotential":  { "candidateId": "", "name": "", "evidence": "1 sentence" },
-  "lowestRisk":        { "candidateId": "", "name": "", "evidence": "1 sentence" },
-  "executiveRecommendation": {
-    "preferred": "", "alternative": "", "development": "", "reasoning": "2 sentences"
-  }
+"table": [
+  { "candidateId": "", "name": "", "hireability": 0, "potential": 0, "risk": "Low|Medium|High", "readiness": "", "recommendation": "" }
+],
+"ranking": [
+  { "rank": 1, "candidateId": "", "name": "", "justification": "1 sentence" }
+],
+"bestImmediateHire": { "candidateId": "", "name": "", "evidence": "1 sentence" },
+"highestPotential":  { "candidateId": "", "name": "", "evidence": "1 sentence" },
+"lowestRisk":        { "candidateId": "", "name": "", "evidence": "1 sentence" },
+"executiveRecommendation": {
+  "preferred": "", "alternative": "", "development": "", "reasoning": "2 sentences"
+}
 }
 Output ONLY the JSON object.`;
 
-          const compResp = await callClaude(compPrompt, 1200);
-          const compRaw = compResp.content[0].type === 'text' ? compResp.content[0].text : '{}';
-          comparison = parseJson(compRaw, 'comparison');
-        }
-
-        res.json({
-          report: { generatedAt: new Date().toISOString(), candidates: candidateReports, comparison },
-        });
-      } catch (err: any) {
-        console.error('[generate-report] error:', err.message);
-        res.status(500).json({ error: err.message });
+        const compResp = await callClaude(compPrompt, 1200);
+        const compRaw = compResp.content[0].type === 'text' ? compResp.content[0].text : '{}';
+        comparison = parseJson(compRaw, 'comparison');
       }
-    });
 
-    // ── Team Formation Intelligence ───────────────────────────────────────────
-    app.post('/api/team-formation', async (req: express.Request, res: express.Response) => {
-      try {
-        if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY required');
-        const { candidates } = req.body as { candidates: Array<{ name: string; content?: string }> };
-        if (!candidates?.length) { res.status(400).json({ error: 'candidates required' }); return; }
+      res.json({
+        report: { generatedAt: new Date().toISOString(), candidates: candidateReports, comparison },
+      });
+    } catch (err: any) {
+      console.error('[generate-report] error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
 
-        const pj = (raw: string, label: string): any => {
-          const s = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-          const m = s.match(/\{[\s\S]*\}/); const c = m ? m[0] : s;
-          try { return JSON.parse(c); } catch { /* */ }
-          try { return JSON.parse(jsonrepair(c)); } catch { /* */ }
-          try { return JSON.parse(jsonrepair(s)); } catch (e: any) {
-            throw new Error(`[team-formation] JSON parse failed for ${label}: ${e.message}`);
-          }
-        };
+  // ── Team Formation Intelligence ───────────────────────────────────────────
+  app.post('/api/team-formation', async (req: express.Request, res: express.Response) => {
+    try {
+      if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY required');
+      const { candidates } = req.body as { candidates: Array<{ name: string; content?: string }> };
+      if (!candidates?.length) { res.status(400).json({ error: 'candidates required' }); return; }
 
-        const cvList = candidates
-          .map((cv, i) => `--- Candidate ${i + 1}: ${cv.name} ---\n${(cv.content || '').slice(0, 2500)}`)
-          .join('\n\n');
+      const pj = (raw: string, label: string): any => {
+        const s = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+        const m = s.match(/\{[\s\S]*\}/); const c = m ? m[0] : s;
+        try { return JSON.parse(c); } catch { /* */ }
+        try { return JSON.parse(jsonrepair(c)); } catch { /* */ }
+        try { return JSON.parse(jsonrepair(s)); } catch (e: any) {
+          throw new Error(`[team-formation] JSON parse failed for ${label}: ${e.message}`);
+        }
+      };
 
-        // ── Call 1: Individual personality + department fit profiles ──────────
-        const profilePrompt = `You are an expert organizational psychologist and talent analyst. Analyze each candidate comprehensively for team formation purposes.
+      const cvList = candidates
+        .map((cv, i) => `--- Candidate ${i + 1}: ${cv.name} ---\n${(cv.content || '').slice(0, 2500)}`)
+        .join('\n\n');
+
+      // ── Call 1: Individual personality + department fit profiles ──────────
+      const profilePrompt = `You are an expert organizational psychologist and talent analyst. Analyze each candidate comprehensively for team formation purposes.
 
 Go BEYOND their major and education. Infer personality, work style, and department fit from their FULL profile: past roles, project descriptions, writing tone, achievements, leadership indicators, extracurriculars, skills breadth, and soft skill signals.
 
@@ -2041,54 +2035,54 @@ ${cvList}
 
 Return ONLY this JSON (no markdown, no code fences):
 {
-  "candidates": [
-    {
-      "name": "string",
-      "personalityType": "2-4 word descriptor e.g. Analytical Problem-Solver / Creative Strategist / Empathetic Leader",
-      "personalityTraits": ["trait1","trait2","trait3"],
-      "communicationStyle": "e.g. Direct & Data-Driven / Empathetic & Collaborative / Structured & Precise",
-      "leadershipTendency": "Natural Leader|Strategic Coordinator|Deep Specialist|Collaborative Team Player",
-      "workStyle": "one sentence e.g. Thrives on autonomous deep work but adapts well to team settings",
-      "coreStrengths": ["strength1","strength2","strength3","strength4"],
-      "departmentFit": {
-        "Engineering": 0,
-        "Product Management": 0,
-        "UX & Design": 0,
-        "Data Science & Analytics": 0,
-        "Marketing & Growth": 0,
-        "Sales & Business Dev": 0,
-        "Research & R&D": 0,
-        "Operations & PM": 0,
-        "Finance & Accounting": 0,
-        "HR & People": 0,
-        "Strategy & Consulting": 0,
-        "Leadership & Management": 0
-      },
-      "topDepartments": [
-        {"name":"dept","score":0,"reason":"one sentence why this candidate fits"}
-      ],
-      "suggestedTeamRole": "Their ideal role when working in a team"
-    }
-  ]
+"candidates": [
+  {
+    "name": "string",
+    "personalityType": "2-4 word descriptor e.g. Analytical Problem-Solver / Creative Strategist / Empathetic Leader",
+    "personalityTraits": ["trait1","trait2","trait3"],
+    "communicationStyle": "e.g. Direct & Data-Driven / Empathetic & Collaborative / Structured & Precise",
+    "leadershipTendency": "Natural Leader|Strategic Coordinator|Deep Specialist|Collaborative Team Player",
+    "workStyle": "one sentence e.g. Thrives on autonomous deep work but adapts well to team settings",
+    "coreStrengths": ["strength1","strength2","strength3","strength4"],
+    "departmentFit": {
+      "Engineering": 0,
+      "Product Management": 0,
+      "UX & Design": 0,
+      "Data Science & Analytics": 0,
+      "Marketing & Growth": 0,
+      "Sales & Business Dev": 0,
+      "Research & R&D": 0,
+      "Operations & PM": 0,
+      "Finance & Accounting": 0,
+      "HR & People": 0,
+      "Strategy & Consulting": 0,
+      "Leadership & Management": 0
+    },
+    "topDepartments": [
+      {"name":"dept","score":0,"reason":"one sentence why this candidate fits"}
+    ],
+    "suggestedTeamRole": "Their ideal role when working in a team"
+  }
+]
 }
 
 For departmentFit, assign scores 0–100 reflecting genuine fit based on the full profile — not just degree title.`;
 
-        const profileRaw = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6', max_tokens: 5000,
-          messages: [{ role: 'user', content: profilePrompt }],
-        });
-        const profileText = profileRaw.content[0].type === 'text' ? profileRaw.content[0].text : '';
-        const profileData = pj(profileText, 'profiles');
+      const profileRaw = await anthropic.messages.create({
+        model: 'claude-sonnet-4-6', max_tokens: 5000,
+        messages: [{ role: 'user', content: profilePrompt }],
+      });
+      const profileText = profileRaw.content[0].type === 'text' ? profileRaw.content[0].text : '';
+      const profileData = pj(profileText, 'profiles');
 
-        // ── Call 2: Team composition + optimal grouping (≥2 candidates) ──────
-        let teamAnalysis: any = null;
-        if (candidates.length >= 2) {
-          const profileSummary = (profileData.candidates || [])
-            .map((c: any) => `${c.name}: ${c.personalityType}, ${c.leadershipTendency}, strengths: ${(c.coreStrengths || []).join(', ')}, role: ${c.suggestedTeamRole}`)
-            .join('\n');
+      // ── Call 2: Team composition + optimal grouping (≥2 candidates) ──────
+      let teamAnalysis: any = null;
+      if (candidates.length >= 2) {
+        const profileSummary = (profileData.candidates || [])
+          .map((c: any) => `${c.name}: ${c.personalityType}, ${c.leadershipTendency}, strengths: ${(c.coreStrengths || []).join(', ')}, role: ${c.suggestedTeamRole}`)
+          .join('\n');
 
-          const teamPrompt = `You are an expert team formation strategist. Analyze these candidate profiles and:
+        const teamPrompt = `You are an expert team formation strategist. Analyze these candidate profiles and:
 1. Determine the BEST possible team subset (not necessarily all candidates) — the combination with highest synergy
 2. Assign roles for ALL candidates if they formed a complete team
 3. Provide compatibility and gap analysis
@@ -2098,62 +2092,62 @@ ${profileSummary}
 
 Return ONLY this JSON (no markdown, no code fences):
 {
-  "teamBalance": 0,
-  "synergyScore": 0,
-  "compositionSummary": "2-3 sentences about the full group's dynamic",
-  "members": [
-    {
-      "candidateName": "string",
-      "assignedRole": "Specific role title",
-      "whyThisRole": "one sentence",
-      "keyContribution": "one sentence"
-    }
-  ],
-  "teamStrengths": ["strength1","strength2","strength3"],
-  "teamGaps": ["gap1","gap2"],
-  "potentialChallenges": ["challenge1","challenge2"],
-  "overallRecommendation": "2-3 sentence final recommendation",
-  "optimalGroup": {
-    "members": ["name1","name2"],
-    "reason": "2 sentences — why THIS specific subset forms the strongest team (complementary skills, personality fit, leadership balance)",
-    "synergyScore": 0,
-    "balance": 0,
-    "excluded": [
-      {"name": "candidateName", "reason": "one sentence why this person reduces team optimality (e.g. skill overlap, personality clash, leadership imbalance)"}
-    ]
+"teamBalance": 0,
+"synergyScore": 0,
+"compositionSummary": "2-3 sentences about the full group's dynamic",
+"members": [
+  {
+    "candidateName": "string",
+    "assignedRole": "Specific role title",
+    "whyThisRole": "one sentence",
+    "keyContribution": "one sentence"
   }
+],
+"teamStrengths": ["strength1","strength2","strength3"],
+"teamGaps": ["gap1","gap2"],
+"potentialChallenges": ["challenge1","challenge2"],
+"overallRecommendation": "2-3 sentence final recommendation",
+"optimalGroup": {
+  "members": ["name1","name2"],
+  "reason": "2 sentences — why THIS specific subset forms the strongest team (complementary skills, personality fit, leadership balance)",
+  "synergyScore": 0,
+  "balance": 0,
+  "excluded": [
+    {"name": "candidateName", "reason": "one sentence why this person reduces team optimality (e.g. skill overlap, personality clash, leadership imbalance)"}
+  ]
+}
 }
 
 For optimalGroup: pick the subset (2 or more) that would form the most effective team. If ALL candidates are equally optimal, include all and leave excluded empty. The synergyScore and balance in optimalGroup reflect ONLY the subset, not the full group.`;
 
-          const teamRaw = await anthropic.messages.create({
-            model: 'claude-sonnet-4-6', max_tokens: 3000,
-            messages: [{ role: 'user', content: teamPrompt }],
-          });
-          const teamText = teamRaw.content[0].type === 'text' ? teamRaw.content[0].text : '';
-          teamAnalysis = pj(teamText, 'team-formation');
-        }
-
-        res.json({
-          ok: true,
-          candidates: profileData.candidates || [],
-          teamAnalysis,
-          generatedAt: new Date().toISOString(),
+        const teamRaw = await anthropic.messages.create({
+          model: 'claude-sonnet-4-6', max_tokens: 3000,
+          messages: [{ role: 'user', content: teamPrompt }],
         });
-      } catch (err: any) {
-        console.error('[team-formation] error:', err.message);
-        res.status(500).json({ ok: false, error: err.message });
+        const teamText = teamRaw.content[0].type === 'text' ? teamRaw.content[0].text : '';
+        teamAnalysis = pj(teamText, 'team-formation');
       }
-    });
 
-    // ── Quick custom-group evaluation ─────────────────────────────────────────
-    app.post('/api/search-similarity', async (req: express.Request, res: express.Response) => {
-      try {
-        if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY required');
-        const { query, analysisText } = req.body as { query: string; analysisText: string };
-        if (!query?.trim()) { res.status(400).json({ error: 'query required' }); return; }
+      res.json({
+        ok: true,
+        candidates: profileData.candidates || [],
+        teamAnalysis,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      console.error('[team-formation] error:', err.message);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
 
-        const prompt = `You are an expert talent analyst. Answer the following question based only on the candidate similarity analysis data provided below.
+  // ── Quick custom-group evaluation ─────────────────────────────────────────
+  app.post('/api/search-similarity', async (req: express.Request, res: express.Response) => {
+    try {
+      if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY required');
+      const { query, analysisText } = req.body as { query: string; analysisText: string };
+      if (!query?.trim()) { res.status(400).json({ error: 'query required' }); return; }
+
+      const prompt = `You are an expert talent analyst. Answer the following question based only on the candidate similarity analysis data provided below.
 
 Question: ${query}
 
@@ -2162,70 +2156,84 @@ ${(analysisText || '').slice(0, 14000)}
 
 Provide a direct, specific answer in 2-5 sentences. Name specific candidates when relevant. If the data doesn't contain enough to answer definitively, say what it does show.`;
 
-        const resp = await anthropic.messages.create({
-          model: 'claude-haiku-4-5',
-          max_tokens: 500,
-          messages: [{ role: 'user', content: prompt }],
-        });
-        const answer = resp.content[0].type === 'text' ? resp.content[0].text : '';
-        res.json({ answer });
-      } catch (err: any) {
-        console.error('[search-similarity] error:', err.message);
-        res.status(500).json({ error: err.message });
+      const resp = await anthropic.messages.create({
+        model: 'claude-haiku-4-5',
+        max_tokens: 500,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      const answer = resp.content[0].type === 'text' ? resp.content[0].text : '';
+      res.json({ answer });
+    } catch (err: any) {
+      console.error('[search-similarity] error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/evaluate-group', async (req: express.Request, res: express.Response) => {
+    try {
+      if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY required');
+      const { profiles } = req.body as {
+        profiles: Array<{ name: string; personalityType: string; leadershipTendency: string; coreStrengths: string[]; suggestedTeamRole: string }>
+      };
+      if (!profiles?.length || profiles.length < 2) {
+        res.status(400).json({ ok: false, error: 'At least 2 profiles required' }); return;
       }
-    });
 
-    app.post('/api/evaluate-group', async (req: express.Request, res: express.Response) => {
-      try {
-        if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY required');
-        const { profiles } = req.body as {
-          profiles: Array<{ name: string; personalityType: string; leadershipTendency: string; coreStrengths: string[]; suggestedTeamRole: string }>
-        };
-        if (!profiles?.length || profiles.length < 2) {
-          res.status(400).json({ ok: false, error: 'At least 2 profiles required' }); return;
+      const pjLocal = (raw: string): any => {
+        const s = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+        const m = s.match(/\{[\s\S]*\}/); const c = m ? m[0] : s;
+        try { return JSON.parse(c); } catch { /* */ }
+        try { return JSON.parse(jsonrepair(c)); } catch (e: any) {
+          throw new Error(`JSON parse failed: ${e.message}`);
         }
+      };
 
-        const pjLocal = (raw: string): any => {
-          const s = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-          const m = s.match(/\{[\s\S]*\}/); const c = m ? m[0] : s;
-          try { return JSON.parse(c); } catch { /* */ }
-          try { return JSON.parse(jsonrepair(c)); } catch (e: any) {
-            throw new Error(`JSON parse failed: ${e.message}`);
-          }
-        };
+      const groupDesc = profiles
+        .map(p => `- ${p.name}: ${p.personalityType}, ${p.leadershipTendency}, strengths: ${p.coreStrengths.join(', ')}, role: ${p.suggestedTeamRole}`)
+        .join('\n');
 
-        const groupDesc = profiles
-          .map(p => `- ${p.name}: ${p.personalityType}, ${p.leadershipTendency}, strengths: ${p.coreStrengths.join(', ')}, role: ${p.suggestedTeamRole}`)
-          .join('\n');
-
-        const prompt = `Evaluate this custom team group for compatibility and synergy.
+      const prompt = `Evaluate this custom team group for compatibility and synergy.
 
 Members:
 ${groupDesc}
 
 Return ONLY this JSON:
 {
-  "synergyScore": 0,
-  "balance": 0,
-  "summary": "2 sentences on how this group would work together",
-  "strengths": ["strength1","strength2"],
-  "gaps": ["gap1","gap2"],
-  "verdict": "Strong|Good|Moderate|Weak"
+"synergyScore": 0,
+"balance": 0,
+"summary": "2 sentences on how this group would work together",
+"strengths": ["strength1","strength2"],
+"gaps": ["gap1","gap2"],
+"verdict": "Strong|Good|Moderate|Weak"
 }`;
 
-        const raw = await anthropic.messages.create({
-          model: 'claude-haiku-4-5', max_tokens: 600,
-          messages: [{ role: 'user', content: prompt }],
-        });
-        const text = raw.content[0].type === 'text' ? raw.content[0].text : '{}';
-        const result = pjLocal(text);
-        res.json({ ok: true, ...result });
-      } catch (err: any) {
-        console.error('[evaluate-group] error:', err.message);
-        res.status(500).json({ ok: false, error: err.message });
-      }
-    });
+      const raw = await anthropic.messages.create({
+        model: 'claude-haiku-4-5', max_tokens: 600,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      const text = raw.content[0].type === 'text' ? raw.content[0].text : '{}';
+      const result = pjLocal(text);
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      console.error('[evaluate-group] error:', err.message);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
 
+  return app;
+}
+
+// Local/standalone server: API plus Vite dev middleware, or the built SPA in production.
+async function startServer() {
+  const app = createApp();
+  const PORT = 3000;
+
+  if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
@@ -2240,4 +2248,5 @@ Return ONLY this JSON:
   });
 }
 
-startServer();
+// On Vercel the app is served by api/index.ts instead of a long-running server
+if (!process.env.VERCEL) startServer();
