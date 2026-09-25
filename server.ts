@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
-import { federationRouter, requireGovernance, requireCapability }
-  from './src/governance/governanceClient.js';
+import crypto from 'crypto';
 import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
 import { createRequire } from 'module';
@@ -703,6 +702,29 @@ async function withConcurrency<T, R>(
   return results;
 }
 
+// ── Access code ─────────────────────────────────────────────────────────────
+// When TALENTGPT_ACCESS_CODE is set, every /api request must carry it in the
+// x-talentgpt-access-code header. On Vercel the API is public, so a missing code
+// fails closed; locally (npm run dev) the API stays open when no code is set.
+const ACCESS_HEADER = 'x-talentgpt-access-code';
+const sha256 = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest();
+
+function requireAccessCode(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (req.method === 'OPTIONS') return next(); // CORS preflight carries no custom headers
+  const code = process.env.TALENTGPT_ACCESS_CODE;
+  if (!code) {
+    if (process.env.VERCEL) {
+      return res.status(503).json({ error: 'TalentGPT access code is not configured on the server (TALENTGPT_ACCESS_CODE).' });
+    }
+    return next();
+  }
+  const given = req.get(ACCESS_HEADER) || '';
+  if (!given || !crypto.timingSafeEqual(sha256(given), sha256(code))) {
+    return res.status(401).json({ error: 'Access code required.', code: 'ACCESS_CODE_REQUIRED' });
+  }
+  next();
+}
+
 // Builds the Express app with every API route. Used by the local server below and,
 // on Vercel, by api/index.ts (where the SPA itself is served as static files).
 export function createApp() {
@@ -720,9 +742,8 @@ export function createApp() {
   // Middleware for parsing JSON with a larger payload limit for multiple CVs
   app.use(express.json({ limit: '50mb' }));
 
-  // GRETECH governance hub: federation endpoint, then require a valid token on all other /api routes
-  app.use('/api/federation', federationRouter());
-  app.use('/api', requireGovernance());
+  app.use('/api', requireAccessCode);
+  app.post('/api/access-check', (_req, res) => res.json({ ok: true }));
 
   // API endpoints
   app.post('/api/analyze', async (req, res) => {

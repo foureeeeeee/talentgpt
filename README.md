@@ -78,6 +78,8 @@ Open `.env` and set:
 ANTHROPIC_API_KEY=your_key_here
 ```
 
+`TALENTGPT_ACCESS_CODE` is optional locally. If you leave it empty, the API is open on your machine. On Vercel it is **required**: set it in Project → Settings → Environment Variables together with `ANTHROPIC_API_KEY`. TalentGPT asks for the code the first time an AI feature runs and remembers it in that browser.
+
 ### Run locally
 
 ```bash
