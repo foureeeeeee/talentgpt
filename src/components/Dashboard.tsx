@@ -775,17 +775,22 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
   const restoreAll = () => setArchivedIds(new Set());
 
   // ── Delete ────────────────────────────────────────────────────────────────────
-  const deleteJob = () => {
-    if (!active) return;
-    if (!window.confirm(`Delete job "${active.title}" and its ${active.candidates.length} candidate(s)? This can't be undone.`)) return;
-    onDeleteProject(active.id);
-  };
-  const deleteCandidate = (cv: CV) => {
-    if (!active) return;
-    if (!window.confirm(`Delete candidate "${cv.name}" from this job? This can't be undone.`)) return;
-    onDeleteCandidate(active.id, cv.id);
-    setSelected(prev => { const s = new Set(prev); s.delete(cv.id); return s; });
-    setArchivedIds(prev => { const s = new Set(prev); s.delete(cv.id); return s; });
+  // In-app confirm: window.confirm() is silently blocked when TalentGPT is embedded
+  // in a sandboxed frame (e.g. the People & Governance workspace).
+  const [pendingDelete, setPendingDelete] = useState<{ kind: 'job' } | { kind: 'candidate'; cv: CV } | null>(null);
+  const deleteJob = () => { if (active) setPendingDelete({ kind: 'job' }); };
+  const deleteCandidate = (cv: CV) => { if (active) setPendingDelete({ kind: 'candidate', cv }); };
+  const confirmDelete = () => {
+    if (!active || !pendingDelete) return;
+    if (pendingDelete.kind === 'job') {
+      onDeleteProject(active.id);
+    } else {
+      const id = pendingDelete.cv.id;
+      onDeleteCandidate(active.id, id);
+      setSelected(prev => { const s = new Set(prev); s.delete(id); return s; });
+      setArchivedIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+    }
+    setPendingDelete(null);
   };
 
   // ── Tooltip ───────────────────────────────────────────────────────────────────
@@ -1974,6 +1979,40 @@ export function Dashboard({ projects, onNewJob, onEditProject, onAddCandidates, 
           cvs={active.candidates}
           onClose={() => setShowTeam(false)}
         />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {pendingDelete && active && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setPendingDelete(null)}>
+          <div role="alertdialog" aria-modal="true" aria-labelledby="delete-confirm-title"
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
+            <div className="px-6 pt-5 pb-4 flex items-start gap-3">
+              <div className="w-9 h-9 rounded-full bg-red-50 flex items-center justify-center shrink-0">
+                <Trash2 className="w-4 h-4 text-red-500" />
+              </div>
+              <div className="min-w-0">
+                <h2 id="delete-confirm-title" className="font-bold text-gray-900">
+                  {pendingDelete.kind === 'job' ? 'Delete job?' : 'Delete candidate?'}
+                </h2>
+                <p className="text-xs text-gray-500 mt-1 break-words">
+                  {pendingDelete.kind === 'job'
+                    ? <>"{active.title}" and its {active.candidates.length} candidate{active.candidates.length !== 1 ? 's' : ''} will be removed. This can't be undone.</>
+                    : <>"{pendingDelete.cv.name}" will be removed from this job. This can't be undone.</>}
+                </p>
+              </div>
+            </div>
+            <div className="px-6 py-3 border-t border-gray-100 flex justify-end gap-2">
+              <button onClick={() => setPendingDelete(null)} autoFocus
+                className="px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-all">
+                Cancel
+              </button>
+              <button onClick={confirmDelete}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-red-600 rounded-lg hover:bg-red-700 transition-all">
+                <Trash2 className="w-3.5 h-3.5" /> Delete
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Email Shortlist Modal */}
